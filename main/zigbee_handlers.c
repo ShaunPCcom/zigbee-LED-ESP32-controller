@@ -7,12 +7,17 @@
 
 #include "zigbee_handlers.h"
 #include "led_driver.h"
+#include "board_led.h"
+#include "board_config.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_common.h"
+#include "driver/gpio.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 static const char *TAG = "zb_handler";
 
@@ -22,11 +27,12 @@ extern led_strip_handle_t g_led_strip;
 /* Current LED state */
 static struct {
     bool on;
-    uint8_t level;        // 0-254
+    uint8_t level;        // 0-254 (RGB brightness)
     uint16_t hue;         // 0-360 (converted from ZCL 0-254)
     uint8_t saturation;   // 0-254
     uint16_t color_temp;  // Mireds (153-370)
     uint8_t color_mode;   // Current color mode (0=HS, 1=XY, 2=CCT)
+    uint8_t white_level;  // 0-254 (independent white channel for RGBW)
 } s_led_state = {
     .on = false,
     .level = 128,
@@ -34,6 +40,7 @@ static struct {
     .saturation = 0,
     .color_temp = 250,
     .color_mode = 2,  // Color temperature mode
+    .white_level = 0,  // White channel off by default
 };
 
 /* Network joined flag */
@@ -127,16 +134,19 @@ static void update_leds(void)
     g = (g * brightness_scale) / 254;
     b = (b * brightness_scale) / 254;
 
+    // White channel (independent for RGBW strips)
+    uint8_t w = s_led_state.white_level;
+
     // Set all LEDs to the same color (for now - segments will come in Phase 3)
     // TODO: Get LED count from configuration
     for (uint16_t i = 0; i < 30; i++) {  // Placeholder count
-        led_strip_set_pixel_rgb(g_led_strip, i, r, g, b);
+        led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, w);
     }
 
     led_strip_refresh(g_led_strip);
 
-    ESP_LOGI(TAG, "LED update: on=%d, level=%d, mode=%d, RGB=(%d,%d,%d)",
-             s_led_state.on, s_led_state.level, s_led_state.color_mode, r, g, b);
+    ESP_LOGI(TAG, "LED update: on=%d, level=%d, mode=%d, RGBW=(%d,%d,%d,%d)",
+             s_led_state.on, s_led_state.level, s_led_state.color_mode, r, g, b, w);
 }
 
 /**
@@ -213,10 +223,35 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
  */
 esp_err_t zigbee_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message)
 {
-    if (callback_id == ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID) {
-        return handle_set_attr_value((const esp_zb_zcl_set_attr_value_message_t *)message);
+    esp_err_t ret = ESP_OK;
+
+    switch (callback_id) {
+    case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID:
+        ret = handle_set_attr_value((const esp_zb_zcl_set_attr_value_message_t *)message);
+        break;
+
+    case ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID:
+        ESP_LOGD(TAG, "Read attribute response");
+        break;
+
+    case ESP_ZB_CORE_CMD_WRITE_ATTR_RESP_CB_ID:
+        ESP_LOGD(TAG, "Write attribute response");
+        break;
+
+    case ESP_ZB_CORE_CMD_REPORT_CONFIG_RESP_CB_ID:
+        ESP_LOGD(TAG, "Report config response");
+        break;
+
+    case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID:
+        ESP_LOGD(TAG, "Default response");
+        break;
+
+    default:
+        ESP_LOGD(TAG, "Unhandled callback: 0x%x", callback_id);
+        break;
     }
-    return ESP_OK;
+
+    return ret;
 }
 
 /**
@@ -240,6 +275,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     switch (sig) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
         ESP_LOGI(TAG, "Stack initialized, starting network steering");
+        board_led_set_state(BOARD_LED_PAIRING);
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
         break;
 
@@ -248,33 +284,39 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         if (status == ESP_OK) {
             if (esp_zb_bdb_is_factory_new()) {
                 ESP_LOGI(TAG, "Factory new device, starting network steering");
+                board_led_set_state(BOARD_LED_PAIRING);
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
             } else {
                 ESP_LOGI(TAG, "Device rebooted, already joined network");
+                board_led_set_state(BOARD_LED_JOINED);
                 s_network_joined = true;
                 // Initialize LEDs to last known state
                 update_leds();
             }
         } else {
             ESP_LOGE(TAG, "Device start/reboot failed: %s", esp_err_to_name(status));
+            board_led_set_state(BOARD_LED_ERROR);
         }
         break;
 
     case ESP_ZB_BDB_SIGNAL_STEERING:
         if (status == ESP_OK) {
             ESP_LOGI(TAG, "Successfully joined Zigbee network!");
+            board_led_set_state(BOARD_LED_JOINED);
             s_network_joined = true;
             // Initialize LEDs
             update_leds();
         } else {
             ESP_LOGW(TAG, "Network steering failed (%s), retrying in 1s...",
                      esp_err_to_name(status));
+            board_led_set_state(BOARD_LED_NOT_JOINED);
             esp_zb_scheduler_alarm(steering_retry_cb, ESP_ZB_BDB_NETWORK_STEERING, 1000);
         }
         break;
 
     case ESP_ZB_ZDO_SIGNAL_LEAVE:
         ESP_LOGW(TAG, "Left Zigbee network");
+        board_led_set_state(BOARD_LED_NOT_JOINED);
         s_network_joined = false;
         // Turn off LEDs when disconnected
         led_strip_clear(g_led_strip);
@@ -290,4 +332,117 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         ESP_LOGI(TAG, "Zigbee signal: 0x%x, status: %s", sig, esp_err_to_name(status));
         break;
     }
+}
+
+/* ================================================================== */
+/*  Factory reset functions                                            */
+/* ================================================================== */
+
+void zigbee_factory_reset(void)
+{
+    ESP_LOGW(TAG, "Zigbee network reset - leaving network, keeping config");
+    board_led_set_state(BOARD_LED_ERROR);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_zb_factory_reset();
+    /* esp_zb_factory_reset() restarts, but just in case: */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+}
+
+void zigbee_full_factory_reset(void)
+{
+    ESP_LOGW(TAG, "FULL factory reset - erasing Zigbee network + NVS config");
+    board_led_set_state(BOARD_LED_ERROR);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Erase application NVS namespace */
+    nvs_handle_t h;
+    if (nvs_open("led_cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGI(TAG, "NVS config erased");
+    }
+
+    /* Then erase Zigbee network data and restart */
+    esp_zb_factory_reset();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+}
+
+/* ================================================================== */
+/*  Boot button monitor: 3s = Zigbee reset, 10s = full factory reset  */
+/* ================================================================== */
+
+static void button_task(void *pv)
+{
+    (void)pv;
+
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BOARD_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+
+    ESP_LOGI(TAG, "Button task started, monitoring GPIO %d", BOARD_BUTTON_GPIO);
+
+    uint32_t held_ms = 0;
+    uint32_t blink_counter = 0;
+
+    while (1) {
+        // Update board LED status
+        board_led_update();
+
+        if (gpio_get_level(BOARD_BUTTON_GPIO) == 0) {
+            /* Button pressed */
+            held_ms += 100;
+            blink_counter++;
+
+            if (held_ms >= 1000 && held_ms < BOARD_BUTTON_HOLD_ZIGBEE_MS) {
+                /* 1-3s: Fast blink - building to Zigbee reset */
+                if (blink_counter % 2 == 0) {
+                    board_led_set_state(BOARD_LED_ERROR);
+                } else {
+                    board_led_set_state(BOARD_LED_NOT_JOINED);
+                }
+            } else if (held_ms >= BOARD_BUTTON_HOLD_ZIGBEE_MS && held_ms < BOARD_BUTTON_HOLD_FULL_MS) {
+                /* 3-10s: Slow blink - Zigbee reset armed, holding for full */
+                if ((blink_counter / 5) % 2 == 0) {
+                    board_led_set_state(BOARD_LED_ERROR);
+                } else {
+                    board_led_set_state(BOARD_LED_NOT_JOINED);
+                }
+            } else if (held_ms >= BOARD_BUTTON_HOLD_FULL_MS) {
+                /* >10s: Solid red - full reset armed */
+                board_led_set_state(BOARD_LED_ERROR);
+            }
+        } else {
+            /* Button released */
+            if (held_ms >= BOARD_BUTTON_HOLD_FULL_MS) {
+                /* >10s hold: Full factory reset (Zigbee + NVS) */
+                zigbee_full_factory_reset();
+            } else if (held_ms >= BOARD_BUTTON_HOLD_ZIGBEE_MS) {
+                /* 3-10s hold: Zigbee network reset only */
+                zigbee_factory_reset();
+            } else if (held_ms >= 1000) {
+                /* 1-3s hold: Cancelled - restore LED to current network state */
+                board_led_set_state(s_network_joined
+                    ? BOARD_LED_JOINED : BOARD_LED_NOT_JOINED);
+            }
+            held_ms = 0;
+            blink_counter = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+/**
+ * @brief Start button monitoring task
+ */
+void button_task_start(void)
+{
+    xTaskCreate(button_task, "btn_task", 2048, NULL, 5, NULL);
 }

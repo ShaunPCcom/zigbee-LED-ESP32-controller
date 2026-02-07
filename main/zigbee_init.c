@@ -52,7 +52,7 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     };
     esp_zb_attribute_list_t *level = esp_zb_level_cluster_create(&level_cfg);
 
-    /* Color Control cluster - create manually */
+    /* Color Control cluster - create manually with all required attributes */
     esp_zb_attribute_list_t *color = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL);
 
     // Current hue and saturation
@@ -60,6 +60,10 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     uint8_t current_saturation = 0;
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID, &current_hue);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &current_saturation);
+
+    // Enhanced hue (16-bit version)
+    uint16_t enhanced_hue = 0;
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &enhanced_hue);
 
     // Current X and Y coordinates (for CIE color space)
     uint16_t current_x = 0x616B;  // Default white
@@ -75,9 +79,11 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MIN_MIREDS_ID, &color_temp_min);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MAX_MIREDS_ID, &color_temp_max);
 
-    // Color mode (0 = HS, 1 = XY, 2 = Color temp)
+    // Color mode and enhanced color mode
     uint8_t color_mode = 2;  // Start with color temperature mode
+    uint8_t enhanced_color_mode = 2;
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &color_mode);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID, &enhanced_color_mode);
 
     // Color capabilities bitmask
     uint16_t color_capabilities = 0x0001 | 0x0008 | 0x0010;  // HS | XY | ColorTemp

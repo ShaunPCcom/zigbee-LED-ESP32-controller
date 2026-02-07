@@ -14,6 +14,9 @@
 #include "nvs_flash.h"
 #include "led_driver.h"
 #include "zigbee_init.h"
+#include "zigbee_handlers.h"
+#include "board_led.h"
+#include "board_config.h"
 
 static const char *TAG = "main";
 
@@ -46,12 +49,16 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "✓ NVS initialized");
 
-    // Configure LED strip
+    // Initialize board LED (onboard WS2812 for status)
+    board_led_init();
+    board_led_set_state(BOARD_LED_NOT_JOINED);
+
+    // Configure LED strip (SK6812 RGBW mode)
     led_strip_config_t strip_config = {
         .gpio_num = LED_STRIP_1_GPIO,
         .led_count = LED_COUNT,
-        .type = LED_STRIP_TYPE_RGB,  // Change to LED_STRIP_TYPE_RGBW for SK6812
-        .rmt_resolution_hz = 0,      // Use default 10MHz
+        .type = LED_STRIP_TYPE_RGBW,  // SK6812 with white channel
+        .rmt_resolution_hz = 0,       // Use default 10MHz
     };
 
     ret = led_strip_create(&strip_config, &g_led_strip);
@@ -72,9 +79,13 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "✓ Zigbee stack initialized as Router");
 
+    // Start button monitoring task
+    button_task_start();
+    ESP_LOGI(TAG, "✓ Button task started (GPIO %d)", BOARD_BUTTON_GPIO);
+
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "Device ready! Waiting for Zigbee network pairing...");
-    ESP_LOGI(TAG, "Please add device in Home Assistant (Zigbee2MQTT)");
+    ESP_LOGI(TAG, "Button: 3s=Zigbee reset, 10s=Full reset");
     ESP_LOGI(TAG, "");
 
     // Main loop - Zigbee runs in its own task

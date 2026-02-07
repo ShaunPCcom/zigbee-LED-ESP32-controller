@@ -31,6 +31,27 @@ esp_err_t zigbee_action_handler(esp_zb_core_action_callback_id_t callback_id, co
  */
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct);
 
+/**
+ * @brief Zigbee network reset (keeps config)
+ *
+ * Leaves the Zigbee network but preserves device configuration
+ */
+void zigbee_factory_reset(void);
+
+/**
+ * @brief Full factory reset (Zigbee + NVS config)
+ *
+ * Erases both Zigbee network data and NVS configuration
+ */
+void zigbee_full_factory_reset(void);
+
+/**
+ * @brief Start button monitoring task
+ *
+ * Monitors boot button for factory reset functions
+ */
+void button_task_start(void);
+
 #ifdef __cplusplus
 }
 #endif
