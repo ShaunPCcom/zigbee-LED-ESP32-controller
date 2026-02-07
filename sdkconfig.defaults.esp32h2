@@ -1,0 +1,10 @@
+# ESP32-H2 specific configuration
+
+# IEEE 802.15.4 (Zigbee radio)
+CONFIG_IEEE802154_ENABLED=y
+
+# Main XTAL frequency
+CONFIG_XTAL_FREQ_32=y
+
+# Sleep
+CONFIG_PM_ENABLE=n

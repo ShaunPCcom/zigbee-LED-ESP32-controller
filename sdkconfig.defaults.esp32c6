@@ -1,0 +1,10 @@
+# ESP32-C6 specific configuration
+
+# IEEE 802.15.4 (Zigbee radio)
+CONFIG_IEEE802154_ENABLED=y
+
+# Enable WiFi coexistence (C6 has both WiFi and Zigbee)
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# Disable WiFi by default (can enable later if needed)
+CONFIG_ESP_WIFI_ENABLED=n
