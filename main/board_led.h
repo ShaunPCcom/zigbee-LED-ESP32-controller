@@ -1,6 +1,6 @@
 /**
  * @file board_led.h
- * @brief Status LED indication via main LED strip (first 3 pixels)
+ * @brief Status LED indication via onboard WS2812 (GPIO8, RMT)
  *
  * Matches LD2450 project indicator behaviour:
  *   NOT_JOINED : amber blink ~2Hz, indefinite
