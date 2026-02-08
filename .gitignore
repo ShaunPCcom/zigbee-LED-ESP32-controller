@@ -10,9 +10,10 @@ sdkconfig.old
 dependencies.lock
 managed_components/
 
-# IDE files
+# IDE / language server files
 .vscode/
 .idea/
+.cache/
 *.swp
 *.swo
 *~
