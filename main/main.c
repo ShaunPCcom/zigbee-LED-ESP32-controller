@@ -2,8 +2,8 @@
  * @file main.c
  * @brief Main entry point for Zigbee LED Controller
  *
- * Phase 2: Zigbee integration
- * Controls LED strip via Zigbee commands from Home Assistant
+ * Phase 4: Dual physical strip support via SPI time-multiplexing.
+ * Controls LED strips via Zigbee commands from Home Assistant.
  */
 
 #include <stdio.h>
@@ -23,11 +23,8 @@
 
 static const char *TAG = "main";
 
-// Global LED strip handle (accessed by zigbee_handlers.c)
-led_strip_handle_t g_led_strip = NULL;
-
-// LED count - loaded from NVS at boot, used by LED driver and Zigbee init
-uint16_t g_led_count = LED_STRIP_COUNT;
+/* Per-strip LED counts — loaded from NVS, used by LED driver and Zigbee init */
+uint16_t g_strip_count[2] = {LED_STRIP_1_COUNT, LED_STRIP_2_COUNT};
 
 void app_main(void)
 {
@@ -35,7 +32,7 @@ void app_main(void)
     ESP_LOGI(TAG, "  Zigbee LED Controller");
     ESP_LOGI(TAG, "========================================");
 
-    // Initialize NVS (required for Zigbee and config storage)
+    /* Initialize NVS */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "NVS partition was truncated, erasing...");
@@ -43,72 +40,58 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "✓ NVS initialized");
+    ESP_LOGI(TAG, "NVS initialized");
 
-    // Initialize config storage
     ESP_ERROR_CHECK(config_storage_init());
 
-    // Load LED count from NVS (may override compile-time default)
-    uint16_t stored_count;
-    if (config_storage_load_led_count(&stored_count) == ESP_OK) {
-        g_led_count = stored_count;
-        ESP_LOGI(TAG, "LED count loaded from NVS: %u", g_led_count);
+    /* Load per-strip counts from NVS */
+    uint16_t tmp;
+    for (int i = 0; i < 2; i++) {
+        if (config_storage_load_strip_count(i, &tmp) == ESP_OK) {
+            g_strip_count[i] = tmp;
+            ESP_LOGI(TAG, "Strip %d count from NVS: %u", i, g_strip_count[i]);
+        }
     }
 
-    // Initialize segment manager — segment 1 defaults to full strip length
-    // (must be after g_led_count is resolved from NVS)
-    segment_manager_init(g_led_count);
-    // Load persisted geometry and state before Zigbee init so the custom
-    // cluster attributes are populated with the correct values at creation time.
+    /* Initialize segment manager (segment 1 defaults to full strip 0 length) */
+    segment_manager_init(g_strip_count[0]);
     segment_manager_load();
 
-    // Initialize board LED (onboard WS2812 for status)
+    /* Initialize board LED status (uses strip 0, pixels 0-2) */
     board_led_init();
     board_led_set_state(BOARD_LED_NOT_JOINED);
 
-    // Configure LED strip (SK6812 RGBW mode)
-    led_strip_config_t strip_config = {
-        .gpio_num = LED_STRIP_1_GPIO,
-        .led_count = g_led_count,
-        .type = LED_STRIP_TYPE,
-        .rmt_resolution_hz = 0,       // Use default 10MHz
-    };
-
-    ret = led_strip_create(&strip_config, &g_led_strip);
+    /* Initialize LED driver (SPI, both strips) */
+    ret = led_driver_init(g_strip_count[0], g_strip_count[1]);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to create LED strip: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to init LED driver: %s", esp_err_to_name(ret));
         return;
     }
+    led_driver_clear(0);
+    led_driver_clear(1);
+    led_driver_refresh();
+    ESP_LOGI(TAG, "LED driver initialized (strip0=%u@GPIO%d strip1=%u@GPIO%d)",
+             g_strip_count[0], LED_STRIP_1_GPIO, g_strip_count[1], LED_STRIP_2_GPIO);
 
-    // Clear strip initially
-    led_strip_clear(g_led_strip);
-    ESP_LOGI(TAG, "✓ LED strip initialized (GPIO %d, %u LEDs)", LED_STRIP_1_GPIO, g_led_count);
-
-    // Initialize and start Zigbee
+    /* Initialize and start Zigbee */
     ret = zigbee_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to initialize Zigbee: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize Zigbee: %s", esp_err_to_name(ret));
         return;
     }
-    ESP_LOGI(TAG, "✓ Zigbee stack initialized as Router");
+    ESP_LOGI(TAG, "Zigbee stack initialized as Router");
 
-    // Start serial CLI
     led_cli_start();
-    ESP_LOGI(TAG, "✓ CLI started");
+    ESP_LOGI(TAG, "CLI started");
 
-    // Start button monitoring task
     button_task_start();
-    ESP_LOGI(TAG, "✓ Button task started (GPIO %d)", BOARD_BUTTON_GPIO);
+    ESP_LOGI(TAG, "Button task started (GPIO %d)", BOARD_BUTTON_GPIO);
 
-    ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "Device ready! Waiting for Zigbee network pairing...");
     ESP_LOGI(TAG, "Button: 3s=Zigbee reset, 10s=Full reset");
-    ESP_LOGI(TAG, "");
 
-    // Main loop - Zigbee runs in its own task
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        ESP_LOGI(TAG, "System running... (uptime: %lld seconds)", esp_timer_get_time() / 1000000);
+        ESP_LOGI(TAG, "Uptime: %lld s", esp_timer_get_time() / 1000000);
     }
 }
-

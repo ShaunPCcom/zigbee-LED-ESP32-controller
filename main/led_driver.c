@@ -1,283 +1,198 @@
 /**
  * @file led_driver.c
- * @brief LED strip driver implementation using RMT peripheral
+ * @brief SPI-based LED driver with time-multiplexed dual strip support
  *
- * WS2812B/SK6812 timing requirements:
- * - T0H (0 bit high): ~0.4us
- * - T0L (0 bit low): ~0.85us
- * - T1H (1 bit high): ~0.8us
- * - T1L (1 bit low): ~0.45us
- * - Reset: >50us low
+ * SK6812 RGBW strips (GRBW byte order). SPI at 2.5 MHz encodes each LED bit
+ * as 3 SPI bits:
+ *   0 -> 100  (high 400 ns, low 800 ns)
+ *   1 -> 110  (high 800 ns, low 400 ns)
+ *
+ * Both strips share SPI2. Before each strip transmission the MOSI GPIO is
+ * switched via the GPIO matrix.
  */
 
 #include "led_driver.h"
+#include "board_config.h"
 #include "esp_log.h"
 #include "esp_check.h"
-#include "driver/rmt_encoder.h"
-#include "driver/rmt_tx.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
+#include "soc/spi_periph.h"
+#include "esp_rom_gpio.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "led_driver";
 
-#define LED_STRIP_RMT_RESOLUTION_HZ 10000000 // 10MHz = 0.1us per tick
-#define LED_STRIP_RESET_TIME_US     50       // Reset time in microseconds
+#define LED_SPI_CLOCK_HZ    2500000   /* 2.5 MHz -> 400 ns per SPI bit */
+#define BYTES_PER_LED       4         /* SK6812: GRBW */
+#define SPI_BYTES_PER_LED   12        /* 4 bytes * 3 SPI bytes per LED byte */
+#define RESET_BYTES         40        /* 40 * 8 * 400ns = 128 us > 80 us reset */
 
-// WS2812B/SK6812 timing in 0.1us ticks (at 10MHz resolution)
-#define LED_T0H_TICKS  4  // 0.4us
-#define LED_T0L_TICKS  8  // 0.8us
-#define LED_T1H_TICKS  8  // 0.8us
-#define LED_T1L_TICKS  4  // 0.4us
-
-/**
- * @brief LED strip structure (internal)
- */
-struct led_strip_t {
-    rmt_channel_handle_t rmt_chan;    /*!< RMT channel handle */
-    rmt_encoder_handle_t rmt_encoder; /*!< RMT encoder handle */
-    uint8_t *pixel_buf;                /*!< Pixel buffer (GRB or GRBW) */
-    uint16_t led_count;                /*!< Number of LEDs */
-    led_strip_type_t type;             /*!< Strip type */
-    uint8_t bytes_per_pixel;           /*!< 3 for RGB, 4 for RGBW */
-};
-
-/**
- * @brief RMT encoder for LED strip
- */
 typedef struct {
-    rmt_encoder_t base;
-    rmt_encoder_t *bytes_encoder;
-    rmt_encoder_t *copy_encoder;
-    rmt_symbol_word_t reset_code;
-} led_strip_encoder_t;
+    uint8_t  *pixel_buf;
+    uint8_t  *spi_buf;
+    uint16_t  count;
+    size_t    spi_len;
+} strip_data_t;
 
-/**
- * @brief Encode LED strip data into RMT symbols
- */
-static size_t IRAM_ATTR led_strip_encode(rmt_encoder_t *encoder, rmt_channel_handle_t channel,
-                               const void *primary_data, size_t data_size, rmt_encode_state_t *ret_state)
+static strip_data_t s_strips[LED_DRIVER_MAX_STRIPS];
+static spi_device_handle_t s_spi = NULL;
+
+/* GPIO for each strip */
+static const int s_gpio[LED_DRIVER_MAX_STRIPS] = {LED_STRIP_1_GPIO, LED_STRIP_2_GPIO};
+
+/* Pre-computed lookup: each LED byte value -> 3 SPI bytes */
+static uint8_t s_lut[256][3];
+
+static void build_lut(void)
 {
-    led_strip_encoder_t *led_encoder = __containerof(encoder, led_strip_encoder_t, base);
-    rmt_encode_state_t session_state = RMT_ENCODING_RESET;
-    size_t encoded_symbols = 0;
-
-    // Encode the pixel data
-    encoded_symbols += led_encoder->bytes_encoder->encode(led_encoder->bytes_encoder, channel,
-                                                           primary_data, data_size, &session_state);
-    if (session_state & RMT_ENCODING_COMPLETE) {
-        // Send reset code after data
-        encoded_symbols += led_encoder->copy_encoder->encode(led_encoder->copy_encoder, channel,
-                                                             &led_encoder->reset_code,
-                                                             sizeof(led_encoder->reset_code), &session_state);
+    for (int v = 0; v < 256; v++) {
+        uint32_t bits = 0;
+        for (int i = 7; i >= 0; i--) {
+            bits = (bits << 3) | ((v & (1 << i)) ? 0b110u : 0b100u);
+        }
+        s_lut[v][0] = (bits >> 16) & 0xFF;
+        s_lut[v][1] = (bits >> 8) & 0xFF;
+        s_lut[v][2] = bits & 0xFF;
     }
-
-    *ret_state = session_state;
-    return encoded_symbols;
 }
 
-/**
- * @brief Delete LED strip encoder
- */
-static esp_err_t led_strip_encoder_del(rmt_encoder_t *encoder)
+static void encode_strip(uint8_t strip_id)
 {
-    led_strip_encoder_t *led_encoder = __containerof(encoder, led_strip_encoder_t, base);
-    rmt_del_encoder(led_encoder->bytes_encoder);
-    rmt_del_encoder(led_encoder->copy_encoder);
-    free(led_encoder);
-    return ESP_OK;
+    strip_data_t *s = &s_strips[strip_id];
+    if (!s->pixel_buf || !s->spi_buf || s->count == 0) return;
+
+    const uint8_t *src = s->pixel_buf;
+    uint8_t *dst = s->spi_buf;
+    size_t n = (size_t)s->count * BYTES_PER_LED;
+
+    for (size_t i = 0; i < n; i++) {
+        dst[0] = s_lut[src[i]][0];
+        dst[1] = s_lut[src[i]][1];
+        dst[2] = s_lut[src[i]][2];
+        dst += 3;
+    }
+    memset(dst, 0, RESET_BYTES);
 }
 
-/**
- * @brief Reset LED strip encoder
- */
-static esp_err_t IRAM_ATTR led_strip_encoder_reset(rmt_encoder_t *encoder)
+static void mosi_connect(int gpio_num)
 {
-    led_strip_encoder_t *led_encoder = __containerof(encoder, led_strip_encoder_t, base);
-    rmt_encoder_reset(led_encoder->bytes_encoder);
-    rmt_encoder_reset(led_encoder->copy_encoder);
-    return ESP_OK;
+    gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
+    esp_rom_gpio_connect_out_signal(gpio_num,
+        spi_periph_signal[SPI2_HOST].spid_out, false, false);
 }
 
-/**
- * @brief Create LED strip encoder
- */
-static esp_err_t led_strip_encoder_create(uint32_t resolution, rmt_encoder_handle_t *ret_encoder)
+static void mosi_idle(int gpio_num)
 {
-    esp_err_t ret = ESP_OK;
-    led_strip_encoder_t *led_encoder = calloc(1, sizeof(led_strip_encoder_t));
-    ESP_RETURN_ON_FALSE(led_encoder, ESP_ERR_NO_MEM, TAG, "no mem for LED encoder");
+    /* Disconnect from SPI peripheral, drive low for LED reset */
+    gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
+    gpio_set_level(gpio_num, 0);
+}
 
-    led_encoder->base.encode = led_strip_encode;
-    led_encoder->base.del = led_strip_encoder_del;
-    led_encoder->base.reset = led_strip_encoder_reset;
+/* ---------- Public API ---------- */
 
-    // Configure bytes encoder for bit-by-bit encoding
-    rmt_bytes_encoder_config_t bytes_config = {
-        .bit0 = {
-            .level0 = 1,
-            .duration0 = LED_T0H_TICKS,
-            .level1 = 0,
-            .duration1 = LED_T0L_TICKS,
-        },
-        .bit1 = {
-            .level0 = 1,
-            .duration0 = LED_T1H_TICKS,
-            .level1 = 0,
-            .duration1 = LED_T1L_TICKS,
-        },
-        .flags.msb_first = 1, // WS2812B uses MSB first
+esp_err_t led_driver_init(uint16_t count0, uint16_t count1)
+{
+    build_lut();
+
+    uint16_t counts[LED_DRIVER_MAX_STRIPS] = {count0, count1};
+
+    spi_bus_config_t bus = {
+        .mosi_io_num   = LED_STRIP_1_GPIO,
+        .miso_io_num   = -1,
+        .sclk_io_num   = -1,
+        .quadhd_io_num = -1,
+        .quadwp_io_num = -1,
+        .max_transfer_sz = 0,
     };
-    ESP_GOTO_ON_ERROR(rmt_new_bytes_encoder(&bytes_config, &led_encoder->bytes_encoder), err, TAG, "create bytes encoder failed");
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO),
+                        TAG, "SPI bus init failed");
 
-    // Configure copy encoder for reset code
-    rmt_copy_encoder_config_t copy_config = {};
-    ESP_GOTO_ON_ERROR(rmt_new_copy_encoder(&copy_config, &led_encoder->copy_encoder), err, TAG, "create copy encoder failed");
-
-    // Create reset code (>50us low)
-    uint32_t reset_ticks = resolution / 1000000 * LED_STRIP_RESET_TIME_US;
-    led_encoder->reset_code.level0 = 0;
-    led_encoder->reset_code.duration0 = reset_ticks;
-    led_encoder->reset_code.level1 = 0;
-    led_encoder->reset_code.duration1 = 0;
-
-    *ret_encoder = &led_encoder->base;
-    return ESP_OK;
-
-err:
-    if (led_encoder) {
-        if (led_encoder->bytes_encoder) {
-            rmt_del_encoder(led_encoder->bytes_encoder);
-        }
-        if (led_encoder->copy_encoder) {
-            rmt_del_encoder(led_encoder->copy_encoder);
-        }
-        free(led_encoder);
-    }
-    return ret;
-}
-
-esp_err_t led_strip_create(const led_strip_config_t *config, led_strip_handle_t *handle)
-{
-    ESP_RETURN_ON_FALSE(config && handle, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    ESP_RETURN_ON_FALSE(config->led_count > 0, ESP_ERR_INVALID_ARG, TAG, "LED count must be > 0");
-
-    esp_err_t ret = ESP_OK;
-    struct led_strip_t *strip = calloc(1, sizeof(struct led_strip_t));
-    ESP_RETURN_ON_FALSE(strip, ESP_ERR_NO_MEM, TAG, "no mem for LED strip");
-
-    strip->led_count = config->led_count;
-    strip->type = config->type;
-    strip->bytes_per_pixel = (config->type == LED_STRIP_TYPE_RGB) ? 3 : 4;
-
-    // Allocate pixel buffer
-    size_t buf_size = config->led_count * strip->bytes_per_pixel;
-    strip->pixel_buf = calloc(1, buf_size);
-    if (!strip->pixel_buf) {
-        free(strip);
-        ESP_LOGE(TAG, "no mem for pixel buffer");
-        return ESP_ERR_NO_MEM;
-    }
-
-    // Configure RMT TX channel
-    uint32_t resolution = config->rmt_resolution_hz ? config->rmt_resolution_hz : LED_STRIP_RMT_RESOLUTION_HZ;
-    rmt_tx_channel_config_t tx_config = {
-        .gpio_num = config->gpio_num,
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = resolution,
-        .mem_block_symbols = 64,
-        .trans_queue_depth = 4,
+    spi_device_interface_config_t dev = {
+        .clock_speed_hz = LED_SPI_CLOCK_HZ,
+        .mode           = 0,
+        .spics_io_num   = -1,
+        .queue_size     = 1,
+        .flags          = SPI_DEVICE_NO_DUMMY,
     };
-    ESP_GOTO_ON_ERROR(rmt_new_tx_channel(&tx_config, &strip->rmt_chan), err, TAG, "create RMT TX channel failed");
+    ESP_RETURN_ON_ERROR(spi_bus_add_device(SPI2_HOST, &dev, &s_spi),
+                        TAG, "SPI add device failed");
 
-    // Create LED strip encoder
-    ESP_GOTO_ON_ERROR(led_strip_encoder_create(resolution, &strip->rmt_encoder), err, TAG, "create LED encoder failed");
-
-    // Enable RMT channel
-    ESP_GOTO_ON_ERROR(rmt_enable(strip->rmt_chan), err, TAG, "enable RMT channel failed");
-
-    *handle = strip;
-    ESP_LOGI(TAG, "LED strip created: GPIO=%d, LEDs=%d, Type=%s",
-             config->gpio_num, config->led_count,
-             config->type == LED_STRIP_TYPE_RGB ? "RGB" : "RGBW");
-    return ESP_OK;
-
-err:
-    if (strip) {
-        if (strip->rmt_chan) {
-            rmt_del_channel(strip->rmt_chan);
+    for (int i = 0; i < LED_DRIVER_MAX_STRIPS; i++) {
+        s_strips[i].count = counts[i];
+        if (counts[i] == 0) {
+            gpio_set_direction(s_gpio[i], GPIO_MODE_OUTPUT);
+            gpio_set_level(s_gpio[i], 0);
+            continue;
         }
-        if (strip->rmt_encoder) {
-            rmt_del_encoder(strip->rmt_encoder);
+
+        size_t pix_sz = (size_t)counts[i] * BYTES_PER_LED;
+        size_t spi_sz = (size_t)counts[i] * SPI_BYTES_PER_LED + RESET_BYTES;
+        s_strips[i].spi_len = spi_sz;
+
+        s_strips[i].pixel_buf = calloc(1, pix_sz);
+        s_strips[i].spi_buf   = heap_caps_calloc(1, spi_sz, MALLOC_CAP_DMA);
+        if (!s_strips[i].pixel_buf || !s_strips[i].spi_buf) {
+            ESP_LOGE(TAG, "No memory for strip %d", i);
+            return ESP_ERR_NO_MEM;
         }
-        if (strip->pixel_buf) {
-            free(strip->pixel_buf);
-        }
-        free(strip);
     }
-    return ret;
-}
 
-esp_err_t led_strip_delete(led_strip_handle_t handle)
-{
-    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "invalid handle");
-
-    rmt_disable(handle->rmt_chan);
-    rmt_del_channel(handle->rmt_chan);
-    rmt_del_encoder(handle->rmt_encoder);
-    free(handle->pixel_buf);
-    free(handle);
-
+    ESP_LOGI(TAG, "LED driver ready: strip0=%u@GPIO%d strip1=%u@GPIO%d",
+             count0, LED_STRIP_1_GPIO, count1, LED_STRIP_2_GPIO);
     return ESP_OK;
 }
 
-esp_err_t led_strip_set_pixel_rgb(led_strip_handle_t handle, uint16_t led_index,
-                                   uint8_t red, uint8_t green, uint8_t blue)
+esp_err_t led_driver_set_pixel(uint8_t strip, uint16_t idx,
+                                uint8_t r, uint8_t g, uint8_t b, uint8_t w)
 {
-    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "invalid handle");
-    ESP_RETURN_ON_FALSE(led_index < handle->led_count, ESP_ERR_INVALID_ARG, TAG, "LED index out of range");
+    if (strip >= LED_DRIVER_MAX_STRIPS) return ESP_ERR_INVALID_ARG;
+    strip_data_t *s = &s_strips[strip];
+    if (!s->pixel_buf || idx >= s->count) return ESP_ERR_INVALID_ARG;
 
-    // WS2812B uses GRB order
-    uint8_t *pixel = handle->pixel_buf + (led_index * handle->bytes_per_pixel);
-    pixel[0] = green;
-    pixel[1] = red;
-    pixel[2] = blue;
-
+    uint8_t *p = s->pixel_buf + (size_t)idx * BYTES_PER_LED;
+    p[0] = g;
+    p[1] = r;
+    p[2] = b;
+    p[3] = w;
     return ESP_OK;
 }
 
-esp_err_t led_strip_set_pixel_rgbw(led_strip_handle_t handle, uint16_t led_index,
-                                    uint8_t red, uint8_t green, uint8_t blue, uint8_t white)
+esp_err_t led_driver_clear(uint8_t strip)
 {
-    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "invalid handle");
-    ESP_RETURN_ON_FALSE(led_index < handle->led_count, ESP_ERR_INVALID_ARG, TAG, "LED index out of range");
-    ESP_RETURN_ON_FALSE(handle->type == LED_STRIP_TYPE_RGBW, ESP_ERR_NOT_SUPPORTED, TAG, "not an RGBW strip");
-
-    // SK6812 uses GRBW order
-    uint8_t *pixel = handle->pixel_buf + (led_index * handle->bytes_per_pixel);
-    pixel[0] = green;
-    pixel[1] = red;
-    pixel[2] = blue;
-    pixel[3] = white;
-
+    if (strip >= LED_DRIVER_MAX_STRIPS) return ESP_ERR_INVALID_ARG;
+    strip_data_t *s = &s_strips[strip];
+    if (s->pixel_buf && s->count > 0) {
+        memset(s->pixel_buf, 0, (size_t)s->count * BYTES_PER_LED);
+    }
     return ESP_OK;
 }
 
-esp_err_t led_strip_refresh(led_strip_handle_t handle)
+esp_err_t led_driver_refresh(void)
 {
-    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "invalid handle");
+    for (int i = 0; i < LED_DRIVER_MAX_STRIPS; i++) {
+        strip_data_t *s = &s_strips[i];
+        if (s->count == 0 || !s->spi_buf) continue;
 
-    rmt_transmit_config_t tx_config = {
-        .loop_count = 0, // No loop
-    };
+        encode_strip(i);
+        mosi_connect(s_gpio[i]);
 
-    size_t data_size = handle->led_count * handle->bytes_per_pixel;
-    return rmt_transmit(handle->rmt_chan, handle->rmt_encoder, handle->pixel_buf, data_size, &tx_config);
+        spi_transaction_t t = {
+            .length    = s->spi_len * 8,
+            .tx_buffer = s->spi_buf,
+        };
+        esp_err_t err = spi_device_transmit(s_spi, &t);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "SPI transmit failed strip %d: %s", i, esp_err_to_name(err));
+        }
+        mosi_idle(s_gpio[i]);
+    }
+    return ESP_OK;
 }
 
-esp_err_t led_strip_clear(led_strip_handle_t handle)
+uint16_t led_driver_get_count(uint8_t strip)
 {
-    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "invalid handle");
-
-    size_t buf_size = handle->led_count * handle->bytes_per_pixel;
-    memset(handle->pixel_buf, 0, buf_size);
-    return led_strip_refresh(handle);
+    if (strip >= LED_DRIVER_MAX_STRIPS) return 0;
+    return s_strips[strip].count;
 }

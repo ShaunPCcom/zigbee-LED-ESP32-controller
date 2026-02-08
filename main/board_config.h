@@ -18,13 +18,16 @@ extern "C" {
 #define BOARD_BUTTON_HOLD_ZIGBEE_MS    3000   /* Zigbee network reset */
 #define BOARD_BUTTON_HOLD_FULL_MS      10000  /* Full factory reset (Zigbee + NVS) */
 
-/* LED strip GPIO
- * ESP32-H2 has 2 RMT TX channels: TX0=board LED (GPIO8), TX1=strip (GPIO4) */
+/* LED strip GPIOs (SPI2 MOSI, time-multiplexed) */
 #define LED_STRIP_1_GPIO               4
+#define LED_STRIP_2_GPIO               5
 
-/* LED strip configuration */
-#define LED_STRIP_COUNT                30   /* Number of LEDs in the strip */
-#define LED_STRIP_TYPE                 LED_STRIP_TYPE_RGBW  /* SK6812 RGBW */
+/* Max physical strips */
+#define MAX_STRIPS                     2
+
+/* Per-strip LED count defaults */
+#define LED_STRIP_1_COUNT              30   /* Strip 1 default LED count */
+#define LED_STRIP_2_COUNT              0    /* Strip 2 default: disabled */
 
 /* Segment configuration */
 #define MAX_SEGMENTS                   8    /* Maximum number of virtual segments */

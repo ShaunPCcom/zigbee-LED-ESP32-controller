@@ -16,7 +16,7 @@
 #include "esp_log.h"
 #include "ha/esp_zigbee_ha_standard.h"
 
-extern uint16_t g_led_count;
+extern uint16_t g_strip_count[2];
 
 static const char *TAG = "zb_init";
 
@@ -96,23 +96,29 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 
     /* Custom clusters on EP1 only */
     if (seg_idx == 0) {
-        /* 0xFC00: Device config — LED count */
+        /* 0xFC00: Device config — per-strip LED counts */
         esp_zb_attribute_list_t *dev_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_DEVICE_CONFIG);
-        uint16_t led_count_val = g_led_count;
+        uint16_t s0 = g_strip_count[0], s1 = g_strip_count[1];
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_LED_COUNT,
-            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &led_count_val);
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s0);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP1_COUNT,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s0);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP2_COUNT,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s1);
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, dev_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
-        /* 0xFC01: Segment geometry — start + count for each segment */
+        /* 0xFC01: Segment geometry — start + count + strip for each segment */
         esp_zb_attribute_list_t *seg_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_SEGMENT_CONFIG);
         segment_geom_t *geom = segment_geom_get();
         for (int n = 0; n < MAX_SEGMENTS; n++) {
-            uint16_t start_attr = ZB_ATTR_SEG_BASE + (uint16_t)(n * ZB_SEG_ATTRS_PER_SEG + 0);
-            uint16_t count_attr = ZB_ATTR_SEG_BASE + (uint16_t)(n * ZB_SEG_ATTRS_PER_SEG + 1);
-            esp_zb_custom_cluster_add_custom_attr(seg_cfg, start_attr,
+            uint16_t base = ZB_ATTR_SEG_BASE + (uint16_t)(n * ZB_SEG_ATTRS_PER_SEG);
+            uint8_t zcl_strip = (uint8_t)(geom[n].strip_id + 1);  /* 1-indexed for ZCL */
+            esp_zb_custom_cluster_add_custom_attr(seg_cfg, base + 0,
                 ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &geom[n].start);
-            esp_zb_custom_cluster_add_custom_attr(seg_cfg, count_attr,
+            esp_zb_custom_cluster_add_custom_attr(seg_cfg, base + 1,
                 ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &geom[n].count);
+            esp_zb_custom_cluster_add_custom_attr(seg_cfg, base + 2,
+                ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &zcl_strip);
         }
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, seg_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     }

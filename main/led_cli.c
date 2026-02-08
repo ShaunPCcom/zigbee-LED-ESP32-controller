@@ -26,19 +26,20 @@
 
 static const char *TAG = "led_cli";
 
-extern uint16_t g_led_count;
+extern uint16_t g_strip_count[2];
 
 static void print_help(void)
 {
     printf(
         "\nLED Controller CLI commands:\n"
         "  led help\n"
-        "  led count <n>              (1-500, saves to NVS, reboot to apply)\n"
+        "  led count <strip> <n>      (strip=1|2, n=1-500, saves to NVS, reboot to apply)\n"
         "  led config                 (show current configuration)\n"
         "  led seg                    (show all segments)\n"
         "  led seg <1-8>              (show one segment)\n"
         "  led seg <1-8> start <n>    (set start LED index)\n"
         "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
+        "  led seg <1-8> strip <n>    (set physical strip, 1 or 2)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
         "  led repair                 (Zigbee network reset / re-pair)\n"
@@ -53,8 +54,8 @@ static void print_segments(int which)
     int from = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : 0;
     int to   = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : MAX_SEGMENTS - 1;
     for (int i = from; i <= to; i++) {
-        printf("seg%d: start=%u count=%u | on=%d level=%u mode=%d hue=%u sat=%u ct=%u\n",
-               i + 1, geom[i].start, geom[i].count,
+        printf("seg%d: start=%u count=%u strip=%u | on=%d level=%u mode=%d hue=%u sat=%u ct=%u\n",
+               i + 1, geom[i].start, geom[i].count, geom[i].strip_id + 1,
                state[i].on, state[i].level, state[i].color_mode,
                state[i].hue, state[i].saturation, state[i].color_temp);
     }
@@ -62,9 +63,9 @@ static void print_segments(int which)
 
 static void print_config(void)
 {
-    printf("config: led_count=%u (GPIO %d, type=%s)\n",
-           g_led_count, LED_STRIP_1_GPIO,
-           (LED_STRIP_TYPE == LED_STRIP_TYPE_RGBW) ? "RGBW" : "RGB");
+    printf("config: strip1=%u@GPIO%d strip2=%u@GPIO%d\n",
+           g_strip_count[0], LED_STRIP_1_GPIO,
+           g_strip_count[1], LED_STRIP_2_GPIO);
 }
 
 static void cli_task(void *arg)
@@ -134,8 +135,12 @@ static void cli_task(void *arg)
                     if (val < 0 || val > 65535) { printf("error: count must be 0-65535\n"); continue; }
                     geom[idx].count = (uint16_t)val;
                     printf("seg%d count=%u\n", seg_num, geom[idx].count);
+                } else if (strcmp(field, "strip") == 0) {
+                    if (val < 1 || val > 2) { printf("error: strip must be 1 or 2\n"); continue; }
+                    geom[idx].strip_id = (uint8_t)(val - 1);
+                    printf("seg%d strip=%u\n", seg_num, val);
                 } else {
-                    printf("unknown field '%s' (start|count)\n", field);
+                    printf("unknown field '%s' (start|count|strip)\n", field);
                     continue;
                 }
                 segment_manager_save();
@@ -143,18 +148,24 @@ static void cli_task(void *arg)
             }
 
             if (strcmp(cmd, "count") == 0) {
+                char *s = strtok(NULL, " \t\r\n");
                 char *v = strtok(NULL, " \t\r\n");
-                if (!v) { printf("usage: led count <n>  (1-500)\n"); continue; }
+                if (!s || !v) { printf("usage: led count <strip> <n>  (strip=1|2, n=1-500)\n"); continue; }
+                int strip = atoi(s);
                 int cnt = atoi(v);
-                if (cnt < 1 || cnt > 500) {
-                    printf("error: count must be 1-500\n");
+                if (strip < 1 || strip > 2) {
+                    printf("error: strip must be 1 or 2\n");
                     continue;
                 }
-                esp_err_t err = config_storage_save_led_count((uint16_t)cnt);
+                if (cnt < 0 || cnt > 500) {
+                    printf("error: count must be 0-500 (0=disable)\n");
+                    continue;
+                }
+                esp_err_t err = config_storage_save_strip_count((uint8_t)(strip - 1), (uint16_t)cnt);
                 if (err == ESP_OK) {
-                    printf("led_count=%d saved (reboot to apply)\n", cnt);
+                    printf("strip%d count=%d saved (reboot to apply)\n", strip, cnt);
                 } else {
-                    printf("error saving led_count: %s\n", esp_err_to_name(err));
+                    printf("error saving strip count: %s\n", esp_err_to_name(err));
                 }
                 continue;
             }

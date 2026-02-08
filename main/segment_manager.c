@@ -52,10 +52,19 @@ void segment_manager_load(void)
         return;
     }
 
-    size_t sz = sizeof(s_geom);
-    err = nvs_get_blob(h, NVS_KEY_GEOM, s_geom, &sz);
+    /* Load geometry into temp buffer to detect struct size mismatch.
+     * The struct gained strip_id in Phase 4; old NVS blobs are smaller. */
+    uint8_t geom_tmp[sizeof(s_geom)];
+    size_t sz = sizeof(geom_tmp);
+    err = nvs_get_blob(h, NVS_KEY_GEOM, geom_tmp, &sz);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Segment geometry loaded");
+        if (sz == sizeof(s_geom)) {
+            memcpy(s_geom, geom_tmp, sizeof(s_geom));
+            ESP_LOGI(TAG, "Segment geometry loaded");
+        } else {
+            ESP_LOGW(TAG, "Segment geometry format changed (stored=%zu expected=%zu), using defaults",
+                     sz, sizeof(s_geom));
+        }
     } else if (err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(TAG, "seg_geom load error: %s", esp_err_to_name(err));
     }

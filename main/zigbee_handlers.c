@@ -27,8 +27,7 @@
 
 static const char *TAG = "zb_handler";
 
-extern led_strip_handle_t g_led_strip;
-extern uint16_t g_led_count;
+extern uint16_t g_strip_count[2];
 
 static bool s_network_joined = false;
 
@@ -254,18 +253,12 @@ static void sync_zcl_from_state(void)
 
 static void update_leds(void)
 {
-    if (!g_led_strip) {
-        ESP_LOGW(TAG, "LED strip not initialized");
-        return;
-    }
-
     segment_geom_t  *geom  = segment_geom_get();
     segment_light_t *state = segment_state_get();
 
-    /* Start with all LEDs off */
-    for (uint16_t i = 0; i < g_led_count; i++) {
-        led_strip_set_pixel_rgbw(g_led_strip, i, 0, 0, 0, 0);
-    }
+    /* Clear both strip buffers */
+    led_driver_clear(0);
+    led_driver_clear(1);
 
     /* Render segments in order (1 first = base layer, 8 last = top overlay) */
     for (int n = 0; n < MAX_SEGMENTS; n++) {
@@ -292,14 +285,16 @@ static void update_leds(void)
             }
         }
 
+        uint8_t strip = geom[n].strip_id;
+        uint16_t strip_len = led_driver_get_count(strip);
         uint16_t end = geom[n].start + geom[n].count;
-        if (end > g_led_count) end = g_led_count;
+        if (end > strip_len) end = strip_len;
         for (uint16_t i = geom[n].start; i < end; i++) {
-            led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, w);
+            led_driver_set_pixel(strip, i, r, g, b, w);
         }
     }
 
-    led_strip_refresh(g_led_strip);
+    led_driver_refresh();
 }
 
 /* ================================================================== */
@@ -318,11 +313,12 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
     ESP_LOGD(TAG, "Attr: EP=%d cluster=0x%04X attr=0x%04X", endpoint, cluster, attr_id);
 
     /* Custom cluster: device config (EP1 only) */
-    if (cluster == ZB_CLUSTER_DEVICE_CONFIG && attr_id == ZB_ATTR_LED_COUNT) {
+    if (cluster == ZB_CLUSTER_DEVICE_CONFIG) {
         uint16_t new_count = *(uint16_t *)value;
         if (new_count >= 1 && new_count <= 500) {
-            ESP_LOGI(TAG, "LED count -> %u (saving, reboot in 1s)", new_count);
-            config_storage_save_led_count(new_count);
+            uint8_t strip = (attr_id == ZB_ATTR_STRIP2_COUNT) ? 1 : 0;
+            ESP_LOGI(TAG, "Strip%d count -> %u (saving, reboot in 1s)", strip, new_count);
+            config_storage_save_strip_count(strip, new_count);
             esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
         }
         return ESP_OK;
@@ -338,9 +334,13 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             if (field == 0) {
                 geom[seg_idx].start = *(uint16_t *)value;
                 ESP_LOGI(TAG, "Seg%d start -> %u", seg_idx + 1, geom[seg_idx].start);
-            } else {
+            } else if (field == 1) {
                 geom[seg_idx].count = *(uint16_t *)value;
                 ESP_LOGI(TAG, "Seg%d count -> %u", seg_idx + 1, geom[seg_idx].count);
+            } else {
+                uint8_t v = *(uint8_t *)value;
+                geom[seg_idx].strip_id = (v >= 2) ? 1 : 0;
+                ESP_LOGI(TAG, "Seg%d strip -> %u", seg_idx + 1, geom[seg_idx].strip_id);
             }
             segment_manager_save();
             update_leds();
@@ -508,7 +508,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         ESP_LOGW(TAG, "Left Zigbee network");
         board_led_set_state(BOARD_LED_NOT_JOINED);
         s_network_joined = false;
-        led_strip_clear(g_led_strip);
+        led_driver_clear(0);
+        led_driver_clear(1);
+        led_driver_refresh();
         esp_zb_scheduler_alarm(steering_retry_cb, ESP_ZB_BDB_NETWORK_STEERING, 1000);
         break;
 

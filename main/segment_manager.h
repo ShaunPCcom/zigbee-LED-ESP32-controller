@@ -22,8 +22,9 @@ extern "C" {
  * @brief Geometry of a single segment (persisted as "seg_geom" blob)
  */
 typedef struct {
-    uint16_t start;  /* First LED index */
-    uint16_t count;  /* Number of LEDs (0 = segment disabled) */
+    uint16_t start;    /* First LED index */
+    uint16_t count;    /* Number of LEDs (0 = segment disabled) */
+    uint8_t  strip_id; /* Physical strip index (0 or 1) */
 } segment_geom_t;
 
 /**

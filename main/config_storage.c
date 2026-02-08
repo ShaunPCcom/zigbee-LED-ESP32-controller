@@ -1,6 +1,11 @@
 /**
  * @file config_storage.c
- * @brief NVS persistence for device configuration (LED strip count)
+ * @brief NVS persistence for device configuration (per-strip LED counts)
+ *
+ * Keys in "led_cfg" namespace:
+ *   "led_cnt_1" - uint16, strip 0 LED count
+ *   "led_cnt_2" - uint16, strip 1 LED count
+ *   "led_cnt"   - legacy key for strip 0 (migration fallback)
  */
 
 #include "config_storage.h"
@@ -9,8 +14,9 @@
 
 static const char *TAG = "config";
 
-#define NVS_NAMESPACE       "led_cfg"
-#define NVS_KEY_LED_COUNT   "led_cnt"
+#define NVS_NAMESPACE    "led_cfg"
+
+static const char *s_keys[2] = {"led_cnt_1", "led_cnt_2"};
 
 esp_err_t config_storage_init(void)
 {
@@ -25,29 +31,35 @@ esp_err_t config_storage_init(void)
     return ESP_OK;
 }
 
-esp_err_t config_storage_save_led_count(uint16_t count)
+esp_err_t config_storage_save_strip_count(uint8_t strip, uint16_t count)
 {
+    if (strip >= 2) return ESP_ERR_INVALID_ARG;
+
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) return err;
 
-    err = nvs_set_u16(h, NVS_KEY_LED_COUNT, count);
+    err = nvs_set_u16(h, s_keys[strip], count);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
 
-    if (err != ESP_OK) ESP_LOGE(TAG, "Save led_count failed: %s", esp_err_to_name(err));
+    if (err != ESP_OK) ESP_LOGE(TAG, "Save strip%d count failed: %s", strip, esp_err_to_name(err));
     return err;
 }
 
-esp_err_t config_storage_load_led_count(uint16_t *count)
+esp_err_t config_storage_load_strip_count(uint8_t strip, uint16_t *count)
 {
-    if (!count) return ESP_ERR_INVALID_ARG;
+    if (strip >= 2 || !count) return ESP_ERR_INVALID_ARG;
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
     if (err != ESP_OK) return err;
 
-    err = nvs_get_u16(h, NVS_KEY_LED_COUNT, count);
+    err = nvs_get_u16(h, s_keys[strip], count);
+    /* Migration: fall back to legacy "led_cnt" for strip 0 */
+    if (err == ESP_ERR_NVS_NOT_FOUND && strip == 0) {
+        err = nvs_get_u16(h, "led_cnt", count);
+    }
     nvs_close(h);
 
     if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NOT_FOUND;

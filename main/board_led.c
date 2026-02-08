@@ -1,6 +1,6 @@
 /**
  * @file board_led.c
- * @brief Status indication via main LED strip (first 3 pixels)
+ * @brief Status indication via main LED strip (first 3 pixels of strip 0)
  *
  * Mirrors the LD2450 project board_led behaviour exactly, using
  * esp_timer for blink and timeout — no polling required.
@@ -16,9 +16,6 @@ static const char *TAG = "board_led";
 #define STATUS_LED_COUNT    3
 #define TIMED_STATE_US      (5 * 1000 * 1000)   /* 5 seconds */
 
-/* Set by main.c after strip creation */
-extern led_strip_handle_t g_led_strip;
-
 static board_led_state_t s_state = BOARD_LED_OFF;
 static esp_timer_handle_t s_blink_timer = NULL;
 static esp_timer_handle_t s_timeout_timer = NULL;
@@ -26,11 +23,10 @@ static bool s_blink_on = false;
 
 static void status_apply(uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!g_led_strip) return;
     for (int i = 0; i < STATUS_LED_COUNT; i++) {
-        led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, 0);
+        led_driver_set_pixel(0, i, r, g, b, 0);
     }
-    led_strip_refresh(g_led_strip);
+    led_driver_refresh();
 }
 
 static void status_clear(void)
@@ -90,7 +86,7 @@ void board_led_init(void)
     };
     ESP_ERROR_CHECK(esp_timer_create(&timeout_args, &s_timeout_timer));
 
-    ESP_LOGI(TAG, "Status indication on main strip (first %d LEDs)", STATUS_LED_COUNT);
+    ESP_LOGI(TAG, "Status indication on strip 0 (first %d LEDs)", STATUS_LED_COUNT);
 }
 
 void board_led_set_state(board_led_state_t state)
