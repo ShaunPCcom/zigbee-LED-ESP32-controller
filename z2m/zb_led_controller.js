@@ -225,6 +225,12 @@ const definition = {
         registerCustomClusters(device);
         const ep1 = device.getEndpoint(1);
         await ep1.read('ledCtrlConfig', ['strip1Count', 'strip2Count']);
+        // Read all segment geometry so Z2M state reflects device NVS on re-interview
+        const segGeomAttrs = [];
+        for (let n = 0; n < MAX_SEGMENTS; n++) {
+            segGeomAttrs.push(`seg${n}Start`, `seg${n}Count`, `seg${n}Strip`);
+        }
+        await ep1.read('segmentConfig', segGeomAttrs);
     },
 };
 
