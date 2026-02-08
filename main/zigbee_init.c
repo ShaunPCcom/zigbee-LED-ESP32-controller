@@ -131,7 +131,7 @@ static void zigbee_register_endpoints(void)
         esp_zb_endpoint_config_t ep_cfg = {
             .endpoint = (uint8_t)(ZB_SEGMENT_EP_BASE + i),
             .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-            .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
+            .app_device_id = 0x0210,  /* Extended Color Light (HS + XY + CT) */
             .app_device_version = 0,
         };
         ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_segment_clusters(i), ep_cfg));
