@@ -65,7 +65,7 @@ void app_main(void)
             case 0x00: state[i].on = false;       break;
             case 0x01: state[i].on = true;        break;
             case 0x02: state[i].on = !state[i].on; break;
-            default:   break;  /* 0xFF = previous, no change */
+            default:   break;  /* DEFAULT_STARTUP_ON_OFF = previous, no change */
             }
         }
     }

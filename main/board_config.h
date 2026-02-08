@@ -33,6 +33,10 @@ extern "C" {
 #define MAX_SEGMENTS                   8    /* Maximum number of virtual segments */
 #define ZB_SEGMENT_EP_BASE             1    /* EP1 = segment 0, EP2 = segment 1, ... */
 
+/* Default power-on behavior (ZCL StartUpOnOff attr 0x4003)
+ * 0x00 = off, 0x01 = on, 0x02 = toggle, 0xFF = previous */
+#define DEFAULT_STARTUP_ON_OFF         0xFF /* restore previous state */
+
 #ifdef __cplusplus
 }
 #endif

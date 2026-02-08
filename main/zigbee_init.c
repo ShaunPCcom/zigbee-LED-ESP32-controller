@@ -80,7 +80,7 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         .on_off = ESP_ZB_ZCL_ON_OFF_ON_OFF_DEFAULT_VALUE,
     };
     esp_zb_attribute_list_t *on_off = esp_zb_on_off_cluster_create(&on_off_cfg);
-    /* StartUpOnOff: power-on behavior (0=off, 1=on, 2=toggle, 0xFF=previous) */
+    /* StartUpOnOff: power-on behavior (0=off, 1=on, 2=toggle, DEFAULT_STARTUP_ON_OFF=previous) */
     uint8_t startup_val = state[seg_idx].startup_on_off;
     esp_zb_on_off_cluster_add_attr(on_off, ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF, &startup_val);
 

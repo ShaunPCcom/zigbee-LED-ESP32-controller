@@ -30,7 +30,7 @@ void segment_manager_init(uint16_t default_count)
     for (int i = 0; i < MAX_SEGMENTS; i++) {
         s_state[i].level = 128;
         s_state[i].color_temp = 250;     /* ~4000K neutral */
-        s_state[i].startup_on_off = 0xFF; /* 0xFF = previous */
+        s_state[i].startup_on_off = DEFAULT_STARTUP_ON_OFF;
     }
 }
 
@@ -84,7 +84,7 @@ void segment_manager_load(void)
             for (int i = 0; i < MAX_SEGMENTS; i++) {
                 memcpy(&s_state[i], state_tmp + i * SEGMENT_STATE_V1_SIZE,
                        SEGMENT_STATE_V1_SIZE);
-                s_state[i].startup_on_off = 0xFF;
+                s_state[i].startup_on_off = DEFAULT_STARTUP_ON_OFF;
             }
             ESP_LOGI(TAG, "Segment state migrated (v1 -> v2)");
         } else {
