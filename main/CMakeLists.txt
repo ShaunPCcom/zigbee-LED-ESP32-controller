@@ -6,6 +6,7 @@ idf_component_register(
          "board_led.c"
          "config_storage.c"
          "segment_manager.c"
+         "preset_manager.c"
          "led_cli.c"
     INCLUDE_DIRS "."
     REQUIRES driver esp_timer nvs_flash esp-zigbee-lib

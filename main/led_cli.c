@@ -22,6 +22,7 @@
 #include "board_config.h"
 #include "config_storage.h"
 #include "segment_manager.h"
+#include "preset_manager.h"
 #include "zigbee_handlers.h"
 
 static const char *TAG = "led_cli";
@@ -40,6 +41,10 @@ static void print_help(void)
         "  led seg <1-8> start <n>    (set start LED index)\n"
         "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
         "  led seg <1-8> strip <n>    (set physical strip, 1 or 2)\n"
+        "  led preset                 (list all presets)\n"
+        "  led preset save <name>     (save current state as preset)\n"
+        "  led preset apply <name>    (recall preset by name)\n"
+        "  led preset delete <name>   (delete preset by name)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
         "  led repair                 (Zigbee network reset / re-pair)\n"
@@ -225,6 +230,76 @@ static void cli_task(void *arg)
                 fflush(stdout);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 zigbee_full_factory_reset();
+                continue;
+            }
+
+            if (strcmp(cmd, "preset") == 0) {
+                char *subcmd = strtok(NULL, " \t\r\n");
+                if (!subcmd) {
+                    /* List all presets */
+                    int count = preset_manager_count();
+                    printf("Stored presets: %d/%d\n", count, MAX_PRESETS);
+                    if (count > 0) {
+                        char name[PRESET_NAME_MAX + 1];
+                        for (int i = 0; i < MAX_PRESETS; i++) {
+                            if (preset_manager_get_name(i, name, sizeof(name))) {
+                                printf("  [%d] %s\n", i, name);
+                            }
+                        }
+                    }
+                    const char *active = preset_manager_get_active();
+                    if (active[0] != '\0') {
+                        printf("Active preset: %s\n", active);
+                    }
+                    continue;
+                }
+
+                if (strcmp(subcmd, "save") == 0) {
+                    char *name = strtok(NULL, " \t\r\n");
+                    if (!name) {
+                        printf("usage: led preset save <name>\n");
+                        continue;
+                    }
+                    if (preset_manager_save(name)) {
+                        printf("Preset '%s' saved\n", name);
+                    } else {
+                        printf("Failed to save preset '%s'\n", name);
+                    }
+                    continue;
+                }
+
+                if (strcmp(subcmd, "apply") == 0) {
+                    char *name = strtok(NULL, " \t\r\n");
+                    if (!name) {
+                        printf("usage: led preset apply <name>\n");
+                        continue;
+                    }
+                    if (preset_manager_recall(name)) {
+                        printf("Preset '%s' applied\n", name);
+                        sync_zcl_from_state();
+                        update_leds();
+                        schedule_save();
+                    } else {
+                        printf("Preset '%s' not found\n", name);
+                    }
+                    continue;
+                }
+
+                if (strcmp(subcmd, "delete") == 0) {
+                    char *name = strtok(NULL, " \t\r\n");
+                    if (!name) {
+                        printf("usage: led preset delete <name>\n");
+                        continue;
+                    }
+                    if (preset_manager_delete(name)) {
+                        printf("Preset '%s' deleted\n", name);
+                    } else {
+                        printf("Preset '%s' not found\n", name);
+                    }
+                    continue;
+                }
+
+                printf("unknown preset command '%s'\n", subcmd);
                 continue;
             }
 

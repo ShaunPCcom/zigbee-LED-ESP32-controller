@@ -20,6 +20,7 @@
 #include "config_storage.h"
 #include "led_cli.h"
 #include "segment_manager.h"
+#include "preset_manager.h"
 
 static const char *TAG = "main";
 
@@ -56,6 +57,9 @@ void app_main(void)
     /* Initialize segment manager (segment 1 defaults to full strip 0 length) */
     segment_manager_init(g_strip_count[0]);
     segment_manager_load();
+
+    /* Initialize preset manager */
+    preset_manager_init();
 
     /* Apply per-segment power-on behavior (StartUpOnOff) */
     {

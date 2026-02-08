@@ -52,6 +52,27 @@ void zigbee_full_factory_reset(void);
  */
 void button_task_start(void);
 
+/**
+ * @brief Sync ZCL attribute store from segment state
+ *
+ * Updates Zigbee attributes to match current segment state (used after preset recall)
+ */
+void sync_zcl_from_state(void);
+
+/**
+ * @brief Update LED strip output
+ *
+ * Renders current segment states to the physical LED strips
+ */
+void update_leds(void);
+
+/**
+ * @brief Schedule NVS save (debounced)
+ *
+ * Queues a save operation with debounce to avoid excessive NVS writes
+ */
+void schedule_save(void);
+
 #ifdef __cplusplus
 }
 #endif

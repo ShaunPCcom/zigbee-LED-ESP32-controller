@@ -13,12 +13,22 @@
 #include "zigbee_handlers.h"
 #include "board_config.h"
 #include "segment_manager.h"
+#include "preset_manager.h"
 #include "esp_log.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include <string.h>
 
 extern uint16_t g_strip_count[2];
 
 static const char *TAG = "zb_init";
+
+/* Static buffers for preset cluster CharString attributes (1 len byte + 16 chars) */
+static uint8_t s_preset_count_attr = 0;
+static uint8_t s_active_preset_attr[17] = {0};
+static uint8_t s_recall_preset_attr[17] = {0};
+static uint8_t s_save_preset_attr[17] = {0};
+static uint8_t s_delete_preset_attr[17] = {0};
+static uint8_t s_preset_name_attrs[MAX_PRESETS][17] = {{0}};
 
 /**
  * @brief Create color control attribute list with HS, XY, and CT capabilities
@@ -125,6 +135,48 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
                 ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &zcl_strip);
         }
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, seg_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+        /* 0xFC02: Preset configuration — save/recall segment states */
+        esp_zb_attribute_list_t *preset_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_PRESET_CONFIG);
+
+        /* Initialize preset count and names from preset manager */
+        s_preset_count_attr = (uint8_t)preset_manager_count();
+        for (int n = 0; n < MAX_PRESETS; n++) {
+            char name[PRESET_NAME_MAX + 1];
+            if (preset_manager_get_name(n, name, sizeof(name))) {
+                size_t len = strlen(name);
+                s_preset_name_attrs[n][0] = (uint8_t)len;
+                memcpy(&s_preset_name_attrs[n][1], name, len);
+            }
+        }
+
+        /* Initialize active preset */
+        const char *active = preset_manager_get_active();
+        if (active && active[0] != '\0') {
+            size_t len = strlen(active);
+            s_active_preset_attr[0] = (uint8_t)len;
+            memcpy(&s_active_preset_attr[1], active, len);
+        }
+
+        /* Add attributes */
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_PRESET_COUNT,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY, &s_preset_count_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_ACTIVE_PRESET,
+            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY, s_active_preset_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_RECALL_PRESET,
+            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY, s_recall_preset_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_SAVE_PRESET,
+            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY, s_save_preset_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_DELETE_PRESET,
+            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY, s_delete_preset_attr);
+
+        /* Add preset name attributes (read-only) */
+        for (int n = 0; n < MAX_PRESETS; n++) {
+            esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_PRESET_NAME_BASE + n,
+                ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY, s_preset_name_attrs[n]);
+        }
+
+        ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, preset_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     }
 
     return cl;

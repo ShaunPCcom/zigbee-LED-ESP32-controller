@@ -42,6 +42,23 @@ extern "C" {
 #define ZB_SEG_ATTRS_PER_SEG            3
 
 /**
+ * @brief Custom cluster 0xFC02: Preset configuration
+ *   0x0000: preset_count    (U8) — number of stored presets (0-8)
+ *   0x0001: active_preset   (CharString) — name of last recalled preset
+ *   0x0002: recall_preset   (CharString) — write name to recall preset
+ *   0x0003: save_preset     (CharString) — write name to save preset
+ *   0x0004: delete_preset   (CharString) — write name to delete preset
+ *   0x0010-0x0017: preset_N_name (CharString) — names of stored presets (slots 0-7)
+ */
+#define ZB_CLUSTER_PRESET_CONFIG        0xFC02
+#define ZB_ATTR_PRESET_COUNT            0x0000
+#define ZB_ATTR_ACTIVE_PRESET           0x0001
+#define ZB_ATTR_RECALL_PRESET           0x0002
+#define ZB_ATTR_SAVE_PRESET             0x0003
+#define ZB_ATTR_DELETE_PRESET           0x0004
+#define ZB_ATTR_PRESET_NAME_BASE        0x0010
+
+/**
  * @brief Initialize Zigbee stack and create device
  */
 esp_err_t zigbee_init(void);

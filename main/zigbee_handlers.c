@@ -14,6 +14,7 @@
 #include "board_config.h"
 #include "config_storage.h"
 #include "segment_manager.h"
+#include "preset_manager.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -38,11 +39,12 @@ static esp_timer_handle_t s_color_update_timer = NULL;
 static esp_timer_handle_t s_save_timer = NULL;
 
 /* Forward declarations */
-static void update_leds(void);
-static void schedule_save(void);
-static void sync_zcl_from_state(void);
+void update_leds(void);
+void schedule_save(void);
+void sync_zcl_from_state(void);
 static void restore_leds_cb(uint8_t param);
 static void reboot_cb(uint8_t param);
+static void sync_zcl_deferred_cb(uint8_t param);
 
 /* ================================================================== */
 /*  Color conversion helpers                                           */
@@ -131,7 +133,7 @@ static void save_timer_cb(void *arg)
     segment_manager_save();
 }
 
-static void schedule_save(void)
+void schedule_save(void)
 {
     if (s_save_timer == NULL) {
         esp_timer_create_args_t args = { .callback = save_timer_cb, .name = "cfg_save" };
@@ -200,7 +202,7 @@ static void color_attr_poll_cb(uint8_t param)
 /*  attribute store so Z2M/HA see the correct values on reconnect.   */
 /* ================================================================== */
 
-static void sync_zcl_from_state(void)
+void sync_zcl_from_state(void)
 {
     segment_light_t *state = segment_state_get();
 
@@ -260,7 +262,7 @@ static void sync_zcl_from_state(void)
 /*  Segment 1 (index 0) covers the full strip as the base layer.     */
 /* ================================================================== */
 
-static void update_leds(void)
+void update_leds(void)
 {
     segment_geom_t  *geom  = segment_geom_get();
     segment_light_t *state = segment_state_get();
@@ -304,6 +306,45 @@ static void update_leds(void)
     }
 
     led_driver_refresh();
+}
+
+/* ================================================================== */
+/*  Preset attribute helpers                                           */
+/* ================================================================== */
+
+/**
+ * @brief Update preset ZCL attributes (count, names, active) from preset manager
+ */
+static void update_preset_zcl_attrs(void)
+{
+    uint8_t count = (uint8_t)preset_manager_count();
+    esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_PRESET_COUNT, &count, false);
+
+    /* Update active preset */
+    const char *active = preset_manager_get_active();
+    uint8_t active_buf[17] = {0};
+    if (active && active[0] != '\0') {
+        size_t len = strlen(active);
+        if (len > PRESET_NAME_MAX) len = PRESET_NAME_MAX;
+        active_buf[0] = (uint8_t)len;
+        memcpy(&active_buf[1], active, len);
+    }
+    esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_ACTIVE_PRESET, active_buf, false);
+
+    /* Update preset name attributes */
+    for (int n = 0; n < MAX_PRESETS; n++) {
+        char name[PRESET_NAME_MAX + 1];
+        uint8_t name_buf[17] = {0};
+        if (preset_manager_get_name(n, name, sizeof(name))) {
+            size_t len = strlen(name);
+            name_buf[0] = (uint8_t)len;
+            memcpy(&name_buf[1], name, len);
+        }
+        esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_PRESET_NAME_BASE + n, name_buf, false);
+    }
 }
 
 /* ================================================================== */
@@ -353,6 +394,45 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             }
             segment_manager_save();
             update_leds();
+        }
+        return ESP_OK;
+    }
+
+    /* Custom cluster: preset configuration (EP1 only) */
+    if (cluster == ZB_CLUSTER_PRESET_CONFIG) {
+        /* Parse CharString: first byte is length, rest is name */
+        uint8_t *char_str = (uint8_t *)value;
+        uint8_t name_len = char_str[0];
+        if (name_len > PRESET_NAME_MAX) name_len = PRESET_NAME_MAX;
+        char name[PRESET_NAME_MAX + 1];
+        memcpy(name, &char_str[1], name_len);
+        name[name_len] = '\0';
+
+        if (attr_id == ZB_ATTR_RECALL_PRESET) {
+            if (preset_manager_recall(name)) {
+                ESP_LOGI(TAG, "Recalled preset '%s'", name);
+                update_leds();
+                schedule_save();
+                update_preset_zcl_attrs();
+                /* Defer ZCL sync to avoid stack assertion when called from attribute handler */
+                esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);  /* 100ms delay */
+            } else {
+                ESP_LOGW(TAG, "Preset '%s' not found", name);
+            }
+        } else if (attr_id == ZB_ATTR_SAVE_PRESET) {
+            if (preset_manager_save(name)) {
+                ESP_LOGI(TAG, "Saved preset '%s'", name);
+                update_preset_zcl_attrs();
+            } else {
+                ESP_LOGW(TAG, "Failed to save preset '%s'", name);
+            }
+        } else if (attr_id == ZB_ATTR_DELETE_PRESET) {
+            if (preset_manager_delete(name)) {
+                ESP_LOGI(TAG, "Deleted preset '%s'", name);
+                update_preset_zcl_attrs();
+            } else {
+                ESP_LOGW(TAG, "Preset '%s' not found", name);
+            }
         }
         return ESP_OK;
     }
@@ -462,6 +542,13 @@ static void reboot_cb(uint8_t param)
 {
     (void)param;
     esp_restart();
+}
+
+static void sync_zcl_deferred_cb(uint8_t param)
+{
+    (void)param;
+    ESP_LOGI(TAG, "Deferred ZCL sync after preset recall");
+    sync_zcl_from_state();
 }
 
 static void restore_leds_cb(uint8_t param)
