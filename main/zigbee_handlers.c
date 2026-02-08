@@ -228,6 +228,11 @@ static void sync_zcl_from_state(void)
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID,
             &hue8, false);
 
+        uint16_t enh_hue = (uint16_t)((uint32_t)state[n].hue * 65535 / 360);
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID,
+            &enh_hue, false);
+
         esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID,
             &state[n].saturation, false);
