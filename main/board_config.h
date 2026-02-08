@@ -22,6 +22,10 @@ extern "C" {
  * ESP32-H2 has 2 RMT TX channels: TX0=board LED (GPIO8), TX1=strip (GPIO4) */
 #define LED_STRIP_1_GPIO               4
 
+/* LED strip configuration */
+#define LED_STRIP_COUNT                30   /* Number of LEDs in the strip */
+#define LED_STRIP_TYPE                 LED_STRIP_TYPE_RGBW  /* SK6812 RGBW */
+
 #ifdef __cplusplus
 }
 #endif

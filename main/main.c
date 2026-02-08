@@ -17,26 +17,21 @@
 #include "zigbee_handlers.h"
 #include "board_led.h"
 #include "board_config.h"
+#include "config_storage.h"
+#include "led_cli.h"
 
 static const char *TAG = "main";
 
-// GPIO pin assignments for ESP32-H2-DevKitM-1
-#define LED_STRIP_1_GPIO    4
-#define LED_STRIP_2_GPIO    5
-#define LED_STRIP_3_GPIO    10
-#define ONBOARD_LED_GPIO    8
-
-// LED configuration
-#define LED_COUNT           30  // Adjust based on your strip
-
 // Global LED strip handle (accessed by zigbee_handlers.c)
 led_strip_handle_t g_led_strip = NULL;
+
+// LED count - loaded from NVS at boot, used by LED driver and Zigbee init
+uint16_t g_led_count = LED_STRIP_COUNT;
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Zigbee LED Controller");
-    ESP_LOGI(TAG, "  Phase 2: Zigbee Integration");
     ESP_LOGI(TAG, "========================================");
 
     // Initialize NVS (required for Zigbee and config storage)
@@ -49,6 +44,16 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "✓ NVS initialized");
 
+    // Initialize config storage
+    ESP_ERROR_CHECK(config_storage_init());
+
+    // Load LED count from NVS (may override compile-time default)
+    uint16_t stored_count;
+    if (config_storage_load_led_count(&stored_count) == ESP_OK) {
+        g_led_count = stored_count;
+        ESP_LOGI(TAG, "LED count loaded from NVS: %u", g_led_count);
+    }
+
     // Initialize board LED (onboard WS2812 for status)
     board_led_init();
     board_led_set_state(BOARD_LED_NOT_JOINED);
@@ -56,8 +61,8 @@ void app_main(void)
     // Configure LED strip (SK6812 RGBW mode)
     led_strip_config_t strip_config = {
         .gpio_num = LED_STRIP_1_GPIO,
-        .led_count = LED_COUNT,
-        .type = LED_STRIP_TYPE_RGBW,  // SK6812 with white channel
+        .led_count = g_led_count,
+        .type = LED_STRIP_TYPE,
         .rmt_resolution_hz = 0,       // Use default 10MHz
     };
 
@@ -69,7 +74,7 @@ void app_main(void)
 
     // Clear strip initially
     led_strip_clear(g_led_strip);
-    ESP_LOGI(TAG, "✓ LED strip initialized (GPIO %d, %d LEDs)", LED_STRIP_1_GPIO, LED_COUNT);
+    ESP_LOGI(TAG, "✓ LED strip initialized (GPIO %d, %u LEDs)", LED_STRIP_1_GPIO, g_led_count);
 
     // Initialize and start Zigbee
     ret = zigbee_init();
@@ -78,6 +83,10 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "✓ Zigbee stack initialized as Router");
+
+    // Start serial CLI
+    led_cli_start();
+    ESP_LOGI(TAG, "✓ CLI started");
 
     // Start button monitoring task
     button_task_start();

@@ -11,6 +11,8 @@
 #include "esp_check.h"
 #include "ha/esp_zigbee_ha_standard.h"
 
+extern uint16_t g_led_count;
+
 static const char *TAG = "zb_init";
 
 /**
@@ -89,6 +91,12 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     uint16_t color_capabilities = 0x0001 | 0x0002 | 0x0008 | 0x0010;  // HS | EnhHue | XY | ColorTemp
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_CAPABILITIES_ID, &color_capabilities);
 
+    /* Custom configuration cluster 0xFC00 — LED count */
+    esp_zb_attribute_list_t *custom_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_DEVICE_CONFIG);
+    uint16_t led_count_val = g_led_count;
+    esp_zb_custom_cluster_add_custom_attr(custom_cfg, ZB_ATTR_LED_COUNT,
+        ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &led_count_val);
+
     /* Create cluster list and add all clusters */
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
 
@@ -101,6 +109,8 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_level_cluster(cluster_list, level,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_color_control_cluster(cluster_list, color,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cluster_list, custom_cfg,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
     return cluster_list;

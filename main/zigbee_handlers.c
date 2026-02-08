@@ -10,6 +10,7 @@
 #include "led_driver.h"
 #include "board_led.h"
 #include "board_config.h"
+#include "config_storage.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
@@ -24,8 +25,9 @@
 
 static const char *TAG = "zb_handler";
 
-/* LED strip handle - set by light_control module */
+/* LED strip handle and LED count - set in main */
 extern led_strip_handle_t g_led_strip;
+extern uint16_t g_led_count;
 
 /* Current LED state */
 static struct {
@@ -58,8 +60,14 @@ static bool s_network_joined = false;
 /* Debounce timer for batching rapid color attribute updates (X+Y arrive separately) */
 static esp_timer_handle_t s_color_update_timer = NULL;
 
-/* Forward declaration */
+/* Debounce timer for NVS saves (avoids write flood during slider drag) */
+static esp_timer_handle_t s_save_timer = NULL;
+
+/* Forward declarations */
 static void update_leds(void);
+static void schedule_save(void);
+static void restore_leds_cb(uint8_t param);
+static void reboot_cb(uint8_t param);
 
 /**
  * @brief Convert ZCL hue (0-254) to degrees (0-360)
@@ -77,6 +85,7 @@ static uint16_t zcl_hue_to_degrees(uint8_t zcl_hue)
 static void color_update_timer_cb(void *arg)
 {
     update_leds();
+    schedule_save();
 }
 
 /**
@@ -159,6 +168,7 @@ static void color_attr_poll_cb(uint8_t param)
 
     if (changed) {
         update_leds();
+        schedule_save();
     }
 
     /* Re-arm for next poll */
@@ -246,6 +256,81 @@ static void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g,
 }
 
 /**
+ * @brief Flush s_led_state to NVS (called from save debounce timer)
+ */
+static void save_timer_cb(void *arg)
+{
+    led_config_t cfg = {
+        .version     = CONFIG_STORAGE_VERSION,
+        .rgb_on      = s_led_state.on,
+        .rgb_level   = s_led_state.level,
+        .color_x     = s_led_state.color_x,
+        .color_y     = s_led_state.color_y,
+        .hue         = (uint8_t)(s_led_state.hue > 254 ? 254 : s_led_state.hue),
+        .saturation  = s_led_state.saturation,
+        .color_mode  = s_led_state.color_mode,
+        .white_on    = s_led_state.white_on,
+        .white_level = s_led_state.white_level,
+    };
+    config_storage_save(&cfg);
+}
+
+/**
+ * @brief Schedule a deferred NVS save (500ms debounce)
+ */
+static void schedule_save(void)
+{
+    if (s_save_timer == NULL) {
+        esp_timer_create_args_t args = {
+            .callback = save_timer_cb,
+            .name = "cfg_save",
+        };
+        esp_timer_create(&args, &s_save_timer);
+    }
+    esp_timer_stop(s_save_timer);
+    esp_timer_start_once(s_save_timer, 500 * 1000);  /* 500ms */
+}
+
+/**
+ * @brief Load persisted config into s_led_state (call once at startup)
+ */
+static void load_config(void)
+{
+    led_config_t cfg;
+    if (config_storage_load(&cfg) != ESP_OK) {
+        ESP_LOGI(TAG, "No saved config, using defaults");
+        return;
+    }
+    s_led_state.on          = cfg.rgb_on;
+    s_led_state.level       = cfg.rgb_level;
+    s_led_state.color_x     = cfg.color_x;
+    s_led_state.color_y     = cfg.color_y;
+    s_led_state.hue         = cfg.hue;
+    s_led_state.saturation  = cfg.saturation;
+    s_led_state.color_mode  = cfg.color_mode;
+    s_led_state.white_on    = cfg.white_on;
+    s_led_state.white_level = cfg.white_level;
+}
+
+/**
+ * @brief Deferred device reboot (gives Zigbee stack time to send write response)
+ */
+static void reboot_cb(uint8_t param)
+{
+    (void)param;
+    esp_restart();
+}
+
+/**
+ * @brief Apply saved LED state after network join (delayed past status green)
+ */
+static void restore_leds_cb(uint8_t param)
+{
+    (void)param;
+    update_leds();
+}
+
+/**
  * @brief Update the physical LED strip based on current state
  */
 static void update_leds(void)
@@ -274,7 +359,7 @@ static void update_leds(void)
     // White channel from endpoint 2 (independent)
     uint8_t w = s_led_state.white_on ? s_led_state.white_level : 0;
 
-    for (uint16_t i = 0; i < 30; i++) {
+    for (uint16_t i = 0; i < g_led_count; i++) {
         led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, w);
     }
 
@@ -304,6 +389,19 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
     bool needs_update = false;
 
+    /* Custom config cluster — LED count */
+    if (cluster == ZB_CLUSTER_DEVICE_CONFIG && attr_id == ZB_ATTR_LED_COUNT) {
+        uint16_t new_count = *(uint16_t *)value;
+        if (new_count >= 1 && new_count <= 500) {
+            ESP_LOGI(TAG, "LED count -> %u (saving, reboot in 1s)", new_count);
+            config_storage_save_led_count(new_count);
+            esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
+        } else {
+            ESP_LOGW(TAG, "LED count %u out of range (1-500), ignoring", new_count);
+        }
+        return ESP_OK;
+    }
+
     if (endpoint == ZB_WHITE_ENDPOINT) {
         /* Endpoint 2: White channel */
         if (cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
@@ -321,6 +419,7 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
         }
         if (needs_update) {
             update_leds();
+            schedule_save();
         }
     } else {
         /* Endpoint 1: RGB */
@@ -329,12 +428,14 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 s_led_state.on = *(bool *)value;
                 ESP_LOGI(TAG, "RGB On/Off -> %s", s_led_state.on ? "ON" : "OFF");
                 update_leds();
+                schedule_save();
             }
         } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL) {
             if (attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID) {
                 s_led_state.level = *(uint8_t *)value;
                 ESP_LOGI(TAG, "RGB level -> %d", s_led_state.level);
                 update_leds();
+                schedule_save();
             }
         } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL) {
             if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID) {
@@ -432,6 +533,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     switch (sig) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
         ESP_LOGI(TAG, "Stack initialized, starting network steering");
+        load_config();
         board_led_set_state(BOARD_LED_PAIRING);
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
         /* Start polling color attributes for HS command detection */
@@ -449,6 +551,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 ESP_LOGI(TAG, "Device rebooted, already joined network");
                 board_led_set_state(BOARD_LED_JOINED);
                 s_network_joined = true;
+                /* Restore LEDs after status green clears (5.5s) */
+                esp_zb_scheduler_alarm(restore_leds_cb, 0, 5500);
             }
         } else {
             ESP_LOGE(TAG, "Device start/reboot failed: %s", esp_err_to_name(status));
@@ -461,6 +565,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Successfully joined Zigbee network!");
             board_led_set_state(BOARD_LED_JOINED);
             s_network_joined = true;
+            /* Restore LEDs after status green clears (5.5s) */
+            esp_zb_scheduler_alarm(restore_leds_cb, 0, 5500);
         } else {
             ESP_LOGW(TAG, "Network steering failed (%s), retrying in 5s...",
                      esp_err_to_name(status));

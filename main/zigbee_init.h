@@ -32,6 +32,13 @@ extern "C" {
 #define ZB_WHITE_ENDPOINT               2
 
 /**
+ * @brief Custom cluster IDs
+ * 0xFC00: Device configuration (led_count attribute)
+ */
+#define ZB_CLUSTER_DEVICE_CONFIG        0xFC00
+#define ZB_ATTR_LED_COUNT               0x0000
+
+/**
  * @brief Initialize Zigbee stack and create device
  *
  * Creates a Zigbee Router device with Color Dimmable Light profile.
