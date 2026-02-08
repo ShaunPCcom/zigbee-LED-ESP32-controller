@@ -41,7 +41,7 @@ static void print_help(void)
         "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
-        "  led repaire                (Zigbee network reset / re-pair)\n"
+        "  led repair                 (Zigbee network reset / re-pair)\n"
         "  led factory-reset          (FULL reset: erase Zigbee + NVS config)\n\n"
     );
 }
@@ -217,7 +217,7 @@ static void cli_task(void *arg)
                 continue;
             }
 
-            if (strcmp(cmd, "repaire") == 0) {
+            if (strcmp(cmd, "repair") == 0) {
                 printf("Zigbee network reset (re-pair)...\n");
                 fflush(stdout);
                 vTaskDelay(pdMS_TO_TICKS(100));

@@ -19,7 +19,7 @@ extern "C" {
  *   led config             - show current config
  *   led nvs                - NVS health check
  *   led reboot             - restart device
- *   led repaire            - Zigbee network reset (re-pair)
+ *   led repair             - Zigbee network reset (re-pair)
  *   led factory-reset      - full factory reset (Zigbee + NVS)
  */
 void led_cli_start(void);
