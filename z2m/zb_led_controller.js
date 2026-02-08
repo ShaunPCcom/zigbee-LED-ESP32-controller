@@ -1,12 +1,17 @@
 /**
  * Zigbee2MQTT External Converter for ZB_LED_CTRL
  *
- * Exposes:
- *   - rgb:     Color wheel (HS) + brightness -> drives R, G, B channels (EP1)
- *   - white:   Brightness only -> drives W channel (EP2)
- *   - seg1-8:  Virtual segments, each a Color Dimmable Light (EP3-10)
- *   - led_count:     Number of LEDs (custom cluster 0xFC00)
- *   - seg_N_start/count/white: Segment geometry (custom cluster 0xFC01)
+ * Device: 8 virtual segments on a single LED strip (EP1-EP8).
+ * Each segment is an Extended Color Light:
+ *   - Color mode (HS/XY) drives RGB channels
+ *   - Color temperature mode drives the White channel
+ *
+ * Segment 1 (EP1) defaults to covering the full strip and acts as the base layer.
+ * Segments 2-8 overlay their configured LED range on top.
+ *
+ * Custom clusters (on EP1):
+ *   0xFC00: Device config (led_count — reboot required after change)
+ *   0xFC01: Segment geometry (start + count per segment, 2 attrs × 8 = 16 total)
  *
  * Installation:
  * 1. Copy this file to your Zigbee2MQTT external converters directory
@@ -21,23 +26,20 @@
 const {light} = require('zigbee-herdsman-converters/lib/modernExtend');
 
 // ---- ZCL data type constants ----
-const ZCL_UINT8  = 0x20;
 const ZCL_UINT16 = 0x21;
 
 // ---- Expose access flags ----
-const ACCESS_ALL = 0b111; // read + write + subscribe
+const ACCESS_ALL = 0b111;
 
 // ---- Custom cluster definitions ----
 const CLUSTER_DEVICE_CONFIG  = 0xFC00;
 const CLUSTER_SEGMENT_CONFIG = 0xFC01;
 const MAX_SEGMENTS = 8;
 
-// Build segment config cluster attributes: 3 per segment (start, count, white)
 const segAttrs = {};
 for (let n = 0; n < MAX_SEGMENTS; n++) {
-    segAttrs[`seg${n}Start`] = {ID: 0x0000 + n * 3 + 0, type: ZCL_UINT16, write: true};
-    segAttrs[`seg${n}Count`] = {ID: 0x0000 + n * 3 + 1, type: ZCL_UINT16, write: true};
-    segAttrs[`seg${n}White`] = {ID: 0x0000 + n * 3 + 2, type: ZCL_UINT8,  write: true};
+    segAttrs[`seg${n}Start`] = {ID: 0x0000 + n * 2 + 0, type: ZCL_UINT16, write: true};
+    segAttrs[`seg${n}Count`] = {ID: 0x0000 + n * 2 + 1, type: ZCL_UINT16, write: true};
 }
 
 const ledCtrlConfigCluster = {
@@ -88,7 +90,6 @@ const fzLocal = {
                 const s = n + 1;
                 if (msg.data[`seg${n}Start`] !== undefined) result[`seg${s}_start`] = msg.data[`seg${n}Start`];
                 if (msg.data[`seg${n}Count`] !== undefined) result[`seg${s}_count`] = msg.data[`seg${n}Count`];
-                if (msg.data[`seg${n}White`] !== undefined) result[`seg${s}_white`] = msg.data[`seg${n}White`];
             }
             return result;
         },
@@ -116,58 +117,49 @@ const tzLocal = {
         convertSet: async (entity, key, value, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
-            // key is like seg1_start, seg3_white, etc.
-            const m = key.match(/^seg(\d+)_(start|count|white)$/);
+            const m = key.match(/^seg(\d+)_(start|count)$/);
             if (!m) return;
-            const n = parseInt(m[1]) - 1; // 0-indexed
+            const n = parseInt(m[1]) - 1;
             const field = m[2];
-            const attrMap = {
-                start: `seg${n}Start`,
-                count: `seg${n}Count`,
-                white: `seg${n}White`,
-            };
-            const attr = attrMap[field];
-            if (!attr) return;
+            const attr = field === 'start' ? `seg${n}Start` : `seg${n}Count`;
             await ep.write('segmentConfig', {[attr]: value});
             return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
-            const m = key.match(/^seg(\d+)_(start|count|white)$/);
+            const m = key.match(/^seg(\d+)_(start|count)$/);
             if (!m) return;
             const n = parseInt(m[1]) - 1;
             const field = m[2];
-            const attrMap = {
-                start: `seg${n}Start`,
-                count: `seg${n}Count`,
-                white: `seg${n}White`,
-            };
-            await ep.read('segmentConfig', [attrMap[field]]);
+            const attr = field === 'start' ? `seg${n}Start` : `seg${n}Count`;
+            await ep.read('segmentConfig', [attr]);
         },
     },
 };
 
-// Register seg_N_start/count/white keys in tzLocal.segments
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
-    tzLocal.segments.key.push(`seg${n}_start`, `seg${n}_count`, `seg${n}_white`);
+    tzLocal.segments.key.push(`seg${n}_start`, `seg${n}_count`);
 }
 
 // ---- Segment geometry exposes ----
 const segExposes = [];
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
     segExposes.push(
-        numericExpose(`seg${n}_start`, `Seg${n} start`, ACCESS_ALL, `Segment ${n} first LED index`, {value_min: 0, value_max: 65535, value_step: 1}),
-        numericExpose(`seg${n}_count`, `Seg${n} count`, ACCESS_ALL, `Segment ${n} LED count (0=disabled)`, {value_min: 0, value_max: 65535, value_step: 1}),
-        numericExpose(`seg${n}_white`, `Seg${n} white`, ACCESS_ALL, `Segment ${n} white level`, {value_min: 0, value_max: 254, value_step: 1}),
+        numericExpose(`seg${n}_start`, `Seg${n} start`, ACCESS_ALL,
+            `Segment ${n} first LED index`, {value_min: 0, value_max: 65535, value_step: 1}),
+        numericExpose(`seg${n}_count`, `Seg${n} count`, ACCESS_ALL,
+            `Segment ${n} LED count (0 = disabled)`, {value_min: 0, value_max: 65535, value_step: 1}),
     );
 }
 
-// ---- Build segment light extends (EP3-EP10) ----
+// ---- 8 segment light extends (EP1-EP8) ----
+// Each segment is a Color Dimmable Light with both color (HS) and color_temp (CT=white)
 const segLightExtends = [];
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
     segLightExtends.push(light({
         color: {modes: ['hs'], enhancedHue: true},
+        colorTemp: {range: [153, 370]},
         endpointNames: [`seg${n}`],
     }));
 }
@@ -177,21 +169,9 @@ const definition = {
     zigbeeModel: ['ZB_LED_CTRL'],
     model: 'ZB_LED_CTRL',
     vendor: 'DIY',
-    description: 'Zigbee LED Strip Controller (ESP32-H2)',
+    description: 'Zigbee LED Strip Controller (ESP32-H2) — 8 RGBW segments',
 
-    extend: [
-        // Endpoint 1: RGB with hue/saturation color wheel
-        light({
-            color: {modes: ['hs'], enhancedHue: true},
-            endpointNames: ['rgb'],
-        }),
-        // Endpoint 2: White channel brightness only
-        light({
-            endpointNames: ['white'],
-        }),
-        // Endpoints 3-10: Segment lights
-        ...segLightExtends,
-    ],
+    extend: segLightExtends,
 
     fromZigbee: [fzLocal.config, fzLocal.segments],
     toZigbee: [tzLocal.led_count, tzLocal.segments],
@@ -208,9 +188,9 @@ const definition = {
     },
 
     endpoint: (device) => {
-        const eps = {rgb: 1, white: 2};
+        const eps = {};
         for (let n = 1; n <= MAX_SEGMENTS; n++) {
-            eps[`seg${n}`] = 2 + n;  // seg1=3, seg2=4, ...
+            eps[`seg${n}`] = n;  // seg1=EP1, seg2=EP2, ...
         }
         return eps;
     },

@@ -48,15 +48,16 @@ void app_main(void)
     // Initialize config storage
     ESP_ERROR_CHECK(config_storage_init());
 
-    // Initialize segment manager (defaults; NVS load happens in zigbee signal handler)
-    segment_manager_init();
-
     // Load LED count from NVS (may override compile-time default)
     uint16_t stored_count;
     if (config_storage_load_led_count(&stored_count) == ESP_OK) {
         g_led_count = stored_count;
         ESP_LOGI(TAG, "LED count loaded from NVS: %u", g_led_count);
     }
+
+    // Initialize segment manager — segment 1 defaults to full strip length
+    // (must be after g_led_count is resolved from NVS)
+    segment_manager_init(g_led_count);
 
     // Initialize board LED (onboard WS2812 for status)
     board_led_init();

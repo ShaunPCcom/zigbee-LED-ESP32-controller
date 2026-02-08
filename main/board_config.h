@@ -28,7 +28,7 @@ extern "C" {
 
 /* Segment configuration */
 #define MAX_SEGMENTS                   8    /* Maximum number of virtual segments */
-#define ZB_SEGMENT_EP_BASE             3    /* EP3 = segment 0, EP4 = segment 1, ... */
+#define ZB_SEGMENT_EP_BASE             1    /* EP1 = segment 0, EP2 = segment 1, ... */
 
 #ifdef __cplusplus
 }

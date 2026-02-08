@@ -39,7 +39,6 @@ static void print_help(void)
         "  led seg <1-8>              (show one segment)\n"
         "  led seg <1-8> start <n>    (set start LED index)\n"
         "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
-        "  led seg <1-8> white <n>    (set white level 0-254)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
         "  led repaire                (Zigbee network reset / re-pair)\n"
@@ -54,10 +53,10 @@ static void print_segments(int which)
     int from = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : 0;
     int to   = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : MAX_SEGMENTS - 1;
     for (int i = from; i <= to; i++) {
-        printf("seg%d: start=%u count=%u white=%u | on=%d level=%u hue=%u sat=%u mode=%d\n",
-               i + 1, geom[i].start, geom[i].count, geom[i].white_level,
-               state[i].on, state[i].level, state[i].hue, state[i].saturation,
-               state[i].color_mode);
+        printf("seg%d: start=%u count=%u | on=%d level=%u mode=%d hue=%u sat=%u ct=%u\n",
+               i + 1, geom[i].start, geom[i].count,
+               state[i].on, state[i].level, state[i].color_mode,
+               state[i].hue, state[i].saturation, state[i].color_temp);
     }
 }
 
@@ -135,12 +134,8 @@ static void cli_task(void *arg)
                     if (val < 0 || val > 65535) { printf("error: count must be 0-65535\n"); continue; }
                     geom[idx].count = (uint16_t)val;
                     printf("seg%d count=%u\n", seg_num, geom[idx].count);
-                } else if (strcmp(field, "white") == 0) {
-                    if (val < 0 || val > 254) { printf("error: white must be 0-254\n"); continue; }
-                    geom[idx].white_level = (uint8_t)val;
-                    printf("seg%d white=%u\n", seg_num, geom[idx].white_level);
                 } else {
-                    printf("unknown field '%s' (start|count|white)\n", field);
+                    printf("unknown field '%s' (start|count)\n", field);
                     continue;
                 }
                 segment_manager_save();

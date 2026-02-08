@@ -14,18 +14,22 @@ static const char *TAG = "seg_mgr";
 #define NVS_KEY_GEOM    "seg_geom"
 #define NVS_KEY_STATE   "seg_state"
 
-/* In-RAM segment state */
 static segment_geom_t  s_geom[MAX_SEGMENTS];
 static segment_light_t s_state[MAX_SEGMENTS];
 
-void segment_manager_init(void)
+void segment_manager_init(uint16_t default_count)
 {
     memset(s_geom, 0, sizeof(s_geom));
     memset(s_state, 0, sizeof(s_state));
 
-    /* Default light state: off, 50% brightness, hue 0 */
+    /* Segment 1 (index 0) covers the full strip by default */
+    s_geom[0].start = 0;
+    s_geom[0].count = default_count;
+
+    /* Default light state: off, 50% brightness */
     for (int i = 0; i < MAX_SEGMENTS; i++) {
         s_state[i].level = 128;
+        s_state[i].color_temp = 250;  /* ~4000K neutral */
     }
 }
 
