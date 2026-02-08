@@ -1,6 +1,10 @@
 /**
  * Zigbee2MQTT External Converter for ZB_LED_CTRL
  *
+ * Exposes two light entities:
+ *   - rgb:   Color wheel (XY) + brightness -> drives R, G, B channels
+ *   - white: Brightness only -> drives W channel (fixed color temp)
+ *
  * Installation:
  * 1. Copy this file to your Zigbee2MQTT external converters directory
  * 2. Add to configuration.yaml:
@@ -17,16 +21,24 @@ const definition = {
     vendor: 'DIY',
     description: 'Zigbee LED Strip Controller (ESP32-H2)',
 
-    // Use the modern light extend with full color support
     extend: [
+        // Endpoint 1: RGB with hue/saturation color wheel
         light({
-            colorTemp: {range: [153, 370]},  // 6500K to 2700K
-            color: {modes: ['xy', 'hs'], enhancedHue: true},
-        })
+            color: {modes: ['hs'], enhancedHue: true},
+            endpointNames: ['rgb'],
+        }),
+        // Endpoint 2: White channel brightness only
+        light({
+            endpointNames: ['white'],
+        }),
     ],
 
     meta: {
-        multiEndpoint: false,  // Single endpoint for now (Phase 2)
+        multiEndpoint: true,
+    },
+
+    endpoint: (device) => {
+        return {rgb: 1, white: 2};
     },
 };
 

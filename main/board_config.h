@@ -18,10 +18,9 @@ extern "C" {
 #define BOARD_BUTTON_HOLD_ZIGBEE_MS    3000   /* Zigbee network reset */
 #define BOARD_BUTTON_HOLD_FULL_MS      10000  /* Full factory reset (Zigbee + NVS) */
 
-/* LED strip GPIOs */
+/* LED strip GPIO
+ * ESP32-H2 has 2 RMT TX channels: TX0=board LED (GPIO8), TX1=strip (GPIO4) */
 #define LED_STRIP_1_GPIO               4
-#define LED_STRIP_2_GPIO               5
-#define LED_STRIP_3_GPIO               10
 
 #ifdef __cplusplus
 }

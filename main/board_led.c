@@ -1,91 +1,136 @@
 /**
  * @file board_led.c
- * @brief Onboard LED status indicators implementation
+ * @brief Status indication via main LED strip (first 3 pixels)
+ *
+ * Mirrors the LD2450 project board_led behaviour exactly, using
+ * esp_timer for blink and timeout — no polling required.
  */
 
 #include "board_led.h"
-#include "board_config.h"
 #include "led_driver.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "board_led";
 
-static led_strip_handle_t s_board_led = NULL;
-static board_led_state_t s_current_state = BOARD_LED_OFF;
-static uint32_t s_blink_counter = 0;
+#define STATUS_LED_COUNT    3
+#define TIMED_STATE_US      (5 * 1000 * 1000)   /* 5 seconds */
+
+/* Set by main.c after strip creation */
+extern led_strip_handle_t g_led_strip;
+
+static board_led_state_t s_state = BOARD_LED_OFF;
+static esp_timer_handle_t s_blink_timer = NULL;
+static esp_timer_handle_t s_timeout_timer = NULL;
+static bool s_blink_on = false;
+
+static void status_apply(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!g_led_strip) return;
+    for (int i = 0; i < STATUS_LED_COUNT; i++) {
+        led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, 0);
+    }
+    led_strip_refresh(g_led_strip);
+}
+
+static void status_clear(void)
+{
+    status_apply(0, 0, 0);
+}
+
+static void blink_cb(void *arg)
+{
+    (void)arg;
+    s_blink_on = !s_blink_on;
+
+    switch (s_state) {
+    case BOARD_LED_NOT_JOINED:
+        if (s_blink_on) status_apply(40, 20, 0);   /* amber */
+        else status_clear();
+        break;
+    case BOARD_LED_PAIRING:
+        if (s_blink_on) status_apply(0, 0, 40);    /* blue */
+        else status_clear();
+        break;
+    case BOARD_LED_ERROR:
+        if (s_blink_on) status_apply(60, 0, 0);    /* red */
+        else status_clear();
+        break;
+    default:
+        break;
+    }
+}
+
+static void timeout_cb(void *arg)
+{
+    (void)arg;
+    switch (s_state) {
+    case BOARD_LED_JOINED:
+        board_led_set_state(BOARD_LED_OFF);
+        break;
+    case BOARD_LED_ERROR:
+        board_led_set_state(BOARD_LED_PAIRING);
+        break;
+    default:
+        break;
+    }
+}
 
 void board_led_init(void)
 {
-    // Create LED strip for onboard LED (single WS2812)
-    led_strip_config_t config = {
-        .gpio_num = BOARD_LED_GPIO,
-        .led_count = 1,
-        .type = LED_STRIP_TYPE_RGB,
-        .rmt_resolution_hz = 0,  // Use default
+    const esp_timer_create_args_t blink_args = {
+        .callback = blink_cb,
+        .name = "led_blink",
     };
+    ESP_ERROR_CHECK(esp_timer_create(&blink_args, &s_blink_timer));
 
-    esp_err_t ret = led_strip_create(&config, &s_board_led);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create board LED: %s", esp_err_to_name(ret));
-        return;
-    }
+    const esp_timer_create_args_t timeout_args = {
+        .callback = timeout_cb,
+        .name = "led_timeout",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timeout_args, &s_timeout_timer));
 
-    // Start with LED off
-    led_strip_clear(s_board_led);
-    ESP_LOGI(TAG, "Board LED initialized on GPIO %d", BOARD_LED_GPIO);
+    ESP_LOGI(TAG, "Status indication on main strip (first %d LEDs)", STATUS_LED_COUNT);
 }
 
 void board_led_set_state(board_led_state_t state)
 {
-    s_current_state = state;
-    s_blink_counter = 0;  // Reset blink counter on state change
-}
+    s_state = state;
+    s_blink_on = false;
 
-void board_led_update(void)
-{
-    if (!s_board_led) return;
+    /* Stop any running timers */
+    esp_timer_stop(s_blink_timer);
+    esp_timer_stop(s_timeout_timer);
 
-    s_blink_counter++;
-
-    uint8_t r = 0, g = 0, b = 0;
-    bool led_on = false;
-
-    switch (s_current_state) {
+    switch (state) {
     case BOARD_LED_OFF:
-        // LED off
-        led_on = false;
+        status_clear();
         break;
 
     case BOARD_LED_NOT_JOINED:
-        // Slow blink (1Hz) - blue
-        led_on = (s_blink_counter / 10) % 2 == 0;
-        r = 0; g = 0; b = 30;
+        /* blinking amber ~2Hz, indefinite */
+        esp_timer_start_periodic(s_blink_timer, 250 * 1000);
         break;
 
     case BOARD_LED_PAIRING:
-        // Fast blink (5Hz) - cyan
-        led_on = (s_blink_counter / 2) % 2 == 0;
-        r = 0; g = 30; b = 30;
+        /* blinking blue ~2Hz, indefinite */
+        esp_timer_start_periodic(s_blink_timer, 250 * 1000);
         break;
 
     case BOARD_LED_JOINED:
-        // Solid green
-        led_on = true;
-        r = 0; g = 30; b = 0;
+        /* solid green for 5 s, then OFF */
+        status_apply(0, 60, 0);
+        esp_timer_start_once(s_timeout_timer, TIMED_STATE_US);
         break;
 
     case BOARD_LED_ERROR:
-        // Very fast blink (10Hz) - red
-        led_on = s_blink_counter % 2 == 0;
-        r = 30; g = 0; b = 0;
+        /* blinking red ~5Hz for 5 s, then NOT_JOINED */
+        esp_timer_start_periodic(s_blink_timer, 100 * 1000);
+        esp_timer_start_once(s_timeout_timer, TIMED_STATE_US);
+        break;
+
+    default:
+        status_clear();
         break;
     }
-
-    if (led_on) {
-        led_strip_set_pixel_rgb(s_board_led, 0, r, g, b);
-    } else {
-        led_strip_set_pixel_rgb(s_board_led, 0, 0, 0, 0);
-    }
-
-    led_strip_refresh(s_board_led);
 }

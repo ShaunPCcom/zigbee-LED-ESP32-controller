@@ -53,7 +53,7 @@ typedef struct {
 /**
  * @brief Encode LED strip data into RMT symbols
  */
-static size_t led_strip_encode(rmt_encoder_t *encoder, rmt_channel_handle_t channel,
+static size_t IRAM_ATTR led_strip_encode(rmt_encoder_t *encoder, rmt_channel_handle_t channel,
                                const void *primary_data, size_t data_size, rmt_encode_state_t *ret_state)
 {
     led_strip_encoder_t *led_encoder = __containerof(encoder, led_strip_encoder_t, base);
@@ -89,7 +89,7 @@ static esp_err_t led_strip_encoder_del(rmt_encoder_t *encoder)
 /**
  * @brief Reset LED strip encoder
  */
-static esp_err_t led_strip_encoder_reset(rmt_encoder_t *encoder)
+static esp_err_t IRAM_ATTR led_strip_encoder_reset(rmt_encoder_t *encoder)
 {
     led_strip_encoder_t *led_encoder = __containerof(encoder, led_strip_encoder_t, base);
     rmt_encoder_reset(led_encoder->bytes_encoder);

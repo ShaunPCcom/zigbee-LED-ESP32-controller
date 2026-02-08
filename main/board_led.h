@@ -1,12 +1,13 @@
 /**
  * @file board_led.h
- * @brief Onboard LED status indicators
+ * @brief Status LED indication via main LED strip (first 3 pixels)
  *
- * Controls the onboard WS2812 LED (GPIO8) to show device status:
- * - Not joined: Slow blink
- * - Pairing: Fast blink
- * - Joined: Solid on
- * - Error: Rapid blink
+ * Matches LD2450 project indicator behaviour:
+ *   NOT_JOINED : amber blink ~2Hz, indefinite
+ *   PAIRING    : blue blink ~2Hz, indefinite
+ *   JOINED     : solid green for 5 s, then OFF
+ *   ERROR      : red blink ~5Hz for 5 s, then NOT_JOINED
+ *   OFF        : all dark
  */
 
 #ifndef BOARD_LED_H
@@ -16,31 +17,16 @@
 extern "C" {
 #endif
 
-/**
- * @brief LED states
- */
 typedef enum {
-    BOARD_LED_OFF,           // LED off
-    BOARD_LED_NOT_JOINED,    // Slow blink - not connected to network
-    BOARD_LED_PAIRING,       // Fast blink - pairing mode
-    BOARD_LED_JOINED,        // Solid - connected to network
-    BOARD_LED_ERROR,         // Very fast blink - error state
+    BOARD_LED_OFF = 0,
+    BOARD_LED_NOT_JOINED,   /* blinking amber, indefinite */
+    BOARD_LED_PAIRING,      /* blinking blue, indefinite */
+    BOARD_LED_JOINED,       /* solid green 5 s, then OFF */
+    BOARD_LED_ERROR,        /* blinking red 5 s, then NOT_JOINED */
 } board_led_state_t;
 
-/**
- * @brief Initialize board LED
- */
 void board_led_init(void);
-
-/**
- * @brief Set LED state
- */
 void board_led_set_state(board_led_state_t state);
-
-/**
- * @brief Update LED (call from button task to handle blinking)
- */
-void board_led_update(void);
 
 #ifdef __cplusplus
 }

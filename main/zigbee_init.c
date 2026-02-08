@@ -79,14 +79,14 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MIN_MIREDS_ID, &color_temp_min);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MAX_MIREDS_ID, &color_temp_max);
 
-    // Color mode and enhanced color mode
-    uint8_t color_mode = 2;  // Start with color temperature mode
-    uint8_t enhanced_color_mode = 2;
+    // Color mode and enhanced color mode — start in HS so Z2M presents the hue wheel
+    uint8_t color_mode = 0;  // 0=HS, 1=XY, 2=ColorTemp
+    uint8_t enhanced_color_mode = 0;
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &color_mode);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID, &enhanced_color_mode);
 
-    // Color capabilities bitmask
-    uint16_t color_capabilities = 0x0001 | 0x0008 | 0x0010;  // HS | XY | ColorTemp
+    // Color capabilities bitmask — bit 1 (Enhanced Hue) enables EnhancedMoveToHue commands
+    uint16_t color_capabilities = 0x0001 | 0x0002 | 0x0008 | 0x0010;  // HS | EnhHue | XY | ColorTemp
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_CAPABILITIES_ID, &color_capabilities);
 
     /* Create cluster list and add all clusters */
@@ -107,24 +107,73 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
 }
 
 /**
- * @brief Register Zigbee endpoint(s)
+ * @brief Create cluster list for white channel endpoint (dimmable only)
+ */
+static esp_zb_cluster_list_t *create_white_clusters(void)
+{
+    esp_zb_basic_cluster_cfg_t basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE,
+    };
+    esp_zb_attribute_list_t *basic = esp_zb_basic_cluster_create(&basic_cfg);
+
+    esp_zb_identify_cluster_cfg_t identify_cfg = {
+        .identify_time = ESP_ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE,
+    };
+    esp_zb_attribute_list_t *identify = esp_zb_identify_cluster_create(&identify_cfg);
+
+    esp_zb_on_off_cluster_cfg_t on_off_cfg = {
+        .on_off = ESP_ZB_ZCL_ON_OFF_ON_OFF_DEFAULT_VALUE,
+    };
+    esp_zb_attribute_list_t *on_off = esp_zb_on_off_cluster_create(&on_off_cfg);
+
+    esp_zb_level_cluster_cfg_t level_cfg = {
+        .current_level = 128,
+    };
+    esp_zb_attribute_list_t *level = esp_zb_level_cluster_create(&level_cfg);
+
+    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list, basic,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, identify,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_on_off_cluster(cluster_list, on_off,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_level_cluster(cluster_list, level,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    return cluster_list;
+}
+
+/**
+ * @brief Register Zigbee endpoints
  */
 static void zigbee_register_endpoints(void)
 {
     esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
 
-    /* Endpoint 1: Main LED strip (Color Dimmable Light) */
-    esp_zb_endpoint_config_t endpoint_cfg = {
+    /* Endpoint 1: RGB strip (Color Dimmable Light) */
+    esp_zb_endpoint_config_t ep1_cfg = {
         .endpoint = ZB_LED_ENDPOINT,
         .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
         .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
         .app_device_version = 0,
     };
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_led_clusters(), ep1_cfg));
 
-    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_led_clusters(), endpoint_cfg));
+    /* Endpoint 2: White channel (Dimmable Light, no color) */
+    esp_zb_endpoint_config_t ep2_cfg = {
+        .endpoint = ZB_WHITE_ENDPOINT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_DIMMABLE_LIGHT_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_white_clusters(), ep2_cfg));
+
     ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
 
-    ESP_LOGI(TAG, "Registered endpoint %d as Color Dimmable Light", ZB_LED_ENDPOINT);
+    ESP_LOGI(TAG, "Registered EP%d as Color Dimmable Light (RGB)", ZB_LED_ENDPOINT);
+    ESP_LOGI(TAG, "Registered EP%d as Dimmable Light (White channel)", ZB_WHITE_ENDPOINT);
 }
 
 /**

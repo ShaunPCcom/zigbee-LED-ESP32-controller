@@ -24,10 +24,12 @@ extern "C" {
 #define ZB_DEVICE_SW_VERSION            1
 
 /**
- * @brief Zigbee endpoint definition
- * Endpoint 1: Main LED strip
+ * @brief Zigbee endpoint definitions
+ * Endpoint 1: RGB LED strip (Color Dimmable Light)
+ * Endpoint 2: White channel (Dimmable Light)
  */
 #define ZB_LED_ENDPOINT                 1
+#define ZB_WHITE_ENDPOINT               2
 
 /**
  * @brief Initialize Zigbee stack and create device
