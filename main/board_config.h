@@ -26,6 +26,10 @@ extern "C" {
 #define LED_STRIP_COUNT                30   /* Number of LEDs in the strip */
 #define LED_STRIP_TYPE                 LED_STRIP_TYPE_RGBW  /* SK6812 RGBW */
 
+/* Segment configuration */
+#define MAX_SEGMENTS                   8    /* Maximum number of virtual segments */
+#define ZB_SEGMENT_EP_BASE             3    /* EP3 = segment 0, EP4 = segment 1, ... */
+
 #ifdef __cplusplus
 }
 #endif

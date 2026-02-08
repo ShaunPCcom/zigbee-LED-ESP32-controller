@@ -21,6 +21,7 @@
 #include "led_driver.h"
 #include "board_config.h"
 #include "config_storage.h"
+#include "segment_manager.h"
 #include "zigbee_handlers.h"
 
 static const char *TAG = "led_cli";
@@ -32,13 +33,32 @@ static void print_help(void)
     printf(
         "\nLED Controller CLI commands:\n"
         "  led help\n"
-        "  led count <n>          (1-500, saves to NVS, reboot to apply)\n"
-        "  led config             (show current configuration)\n"
-        "  led nvs                (NVS health check)\n"
-        "  led reboot             (restart device)\n"
-        "  led repaire            (Zigbee network reset / re-pair)\n"
-        "  led factory-reset      (FULL reset: erase Zigbee + NVS config)\n\n"
+        "  led count <n>              (1-500, saves to NVS, reboot to apply)\n"
+        "  led config                 (show current configuration)\n"
+        "  led seg                    (show all segments)\n"
+        "  led seg <1-8>              (show one segment)\n"
+        "  led seg <1-8> start <n>    (set start LED index)\n"
+        "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
+        "  led seg <1-8> white <n>    (set white level 0-254)\n"
+        "  led nvs                    (NVS health check)\n"
+        "  led reboot                 (restart device)\n"
+        "  led repaire                (Zigbee network reset / re-pair)\n"
+        "  led factory-reset          (FULL reset: erase Zigbee + NVS config)\n\n"
     );
+}
+
+static void print_segments(int which)
+{
+    segment_geom_t  *geom  = segment_geom_get();
+    segment_light_t *state = segment_state_get();
+    int from = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : 0;
+    int to   = (which >= 1 && which <= MAX_SEGMENTS) ? which - 1 : MAX_SEGMENTS - 1;
+    for (int i = from; i <= to; i++) {
+        printf("seg%d: start=%u count=%u white=%u | on=%d level=%u hue=%u sat=%u mode=%d\n",
+               i + 1, geom[i].start, geom[i].count, geom[i].white_level,
+               state[i].on, state[i].level, state[i].hue, state[i].saturation,
+               state[i].color_mode);
+    }
 }
 
 static void print_config(void)
@@ -88,6 +108,44 @@ static void cli_task(void *arg)
 
             if (strcmp(cmd, "help") == 0) { print_help(); continue; }
             if (strcmp(cmd, "config") == 0) { print_config(); continue; }
+
+            if (strcmp(cmd, "seg") == 0) {
+                char *arg1 = strtok(NULL, " \t\r\n");
+                if (!arg1) { print_segments(0); continue; }
+                int seg_num = atoi(arg1);
+                if (seg_num < 1 || seg_num > MAX_SEGMENTS) {
+                    printf("error: segment must be 1-%d\n", MAX_SEGMENTS);
+                    continue;
+                }
+                char *field = strtok(NULL, " \t\r\n");
+                if (!field) { print_segments(seg_num); continue; }
+                char *val_s = strtok(NULL, " \t\r\n");
+                if (!val_s) {
+                    printf("usage: led seg %d %s <value>\n", seg_num, field);
+                    continue;
+                }
+                int val = atoi(val_s);
+                int idx = seg_num - 1;
+                segment_geom_t *geom = segment_geom_get();
+                if (strcmp(field, "start") == 0) {
+                    if (val < 0 || val > 65535) { printf("error: start must be 0-65535\n"); continue; }
+                    geom[idx].start = (uint16_t)val;
+                    printf("seg%d start=%u\n", seg_num, geom[idx].start);
+                } else if (strcmp(field, "count") == 0) {
+                    if (val < 0 || val > 65535) { printf("error: count must be 0-65535\n"); continue; }
+                    geom[idx].count = (uint16_t)val;
+                    printf("seg%d count=%u\n", seg_num, geom[idx].count);
+                } else if (strcmp(field, "white") == 0) {
+                    if (val < 0 || val > 254) { printf("error: white must be 0-254\n"); continue; }
+                    geom[idx].white_level = (uint8_t)val;
+                    printf("seg%d white=%u\n", seg_num, geom[idx].white_level);
+                } else {
+                    printf("unknown field '%s' (start|count|white)\n", field);
+                    continue;
+                }
+                segment_manager_save();
+                continue;
+            }
 
             if (strcmp(cmd, "count") == 0) {
                 char *v = strtok(NULL, " \t\r\n");

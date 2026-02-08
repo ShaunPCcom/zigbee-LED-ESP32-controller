@@ -19,6 +19,7 @@
 #include "board_config.h"
 #include "config_storage.h"
 #include "led_cli.h"
+#include "segment_manager.h"
 
 static const char *TAG = "main";
 
@@ -46,6 +47,9 @@ void app_main(void)
 
     // Initialize config storage
     ESP_ERROR_CHECK(config_storage_init());
+
+    // Initialize segment manager (defaults; NVS load happens in zigbee signal handler)
+    segment_manager_init();
 
     // Load LED count from NVS (may override compile-time default)
     uint16_t stored_count;

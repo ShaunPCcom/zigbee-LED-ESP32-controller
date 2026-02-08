@@ -11,6 +11,7 @@
 #include "board_led.h"
 #include "board_config.h"
 #include "config_storage.h"
+#include "segment_manager.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
@@ -143,7 +144,7 @@ static void color_attr_poll_cb(uint8_t param)
 {
     bool changed = false;
 
-    /* Read enhanced hue (used by Z2M when enhancedHue: true) */
+    /* Poll EP1 enhanced hue */
     uint16_t enh_hue = 0;
     if (read_attr_u16(ZB_LED_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                       ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &enh_hue)) {
@@ -155,7 +156,7 @@ static void color_attr_poll_cb(uint8_t param)
         }
     }
 
-    /* Read saturation */
+    /* Poll EP1 saturation */
     uint8_t sat = 0;
     if (read_attr_u8(ZB_LED_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
                      ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat)) {
@@ -163,6 +164,31 @@ static void color_attr_poll_cb(uint8_t param)
             s_led_state.saturation = sat;
             s_led_state.color_mode = 0;
             changed = true;
+        }
+    }
+
+    /* Poll segment endpoints for HS changes */
+    segment_light_t *seg_state = segment_state_get();
+    for (int n = 0; n < MAX_SEGMENTS; n++) {
+        uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
+        uint16_t seg_enh_hue = 0;
+        if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                          ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &seg_enh_hue)) {
+            uint16_t hd = (uint16_t)((uint32_t)seg_enh_hue * 360 / 65535);
+            if (hd != seg_state[n].hue) {
+                seg_state[n].hue = hd;
+                seg_state[n].color_mode = 0;
+                changed = true;
+            }
+        }
+        uint8_t seg_sat = 0;
+        if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                         ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &seg_sat)) {
+            if (seg_sat != seg_state[n].saturation) {
+                seg_state[n].saturation = seg_sat;
+                seg_state[n].color_mode = 0;
+                changed = true;
+            }
         }
     }
 
@@ -273,6 +299,7 @@ static void save_timer_cb(void *arg)
         .white_level = s_led_state.white_level,
     };
     config_storage_save(&cfg);
+    segment_manager_save();
 }
 
 /**
@@ -299,17 +326,18 @@ static void load_config(void)
     led_config_t cfg;
     if (config_storage_load(&cfg) != ESP_OK) {
         ESP_LOGI(TAG, "No saved config, using defaults");
-        return;
+    } else {
+        s_led_state.on          = cfg.rgb_on;
+        s_led_state.level       = cfg.rgb_level;
+        s_led_state.color_x     = cfg.color_x;
+        s_led_state.color_y     = cfg.color_y;
+        s_led_state.hue         = cfg.hue;
+        s_led_state.saturation  = cfg.saturation;
+        s_led_state.color_mode  = cfg.color_mode;
+        s_led_state.white_on    = cfg.white_on;
+        s_led_state.white_level = cfg.white_level;
     }
-    s_led_state.on          = cfg.rgb_on;
-    s_led_state.level       = cfg.rgb_level;
-    s_led_state.color_x     = cfg.color_x;
-    s_led_state.color_y     = cfg.color_y;
-    s_led_state.hue         = cfg.hue;
-    s_led_state.saturation  = cfg.saturation;
-    s_led_state.color_mode  = cfg.color_mode;
-    s_led_state.white_on    = cfg.white_on;
-    s_led_state.white_level = cfg.white_level;
+    segment_manager_load();
 }
 
 /**
@@ -331,7 +359,30 @@ static void restore_leds_cb(uint8_t param)
 }
 
 /**
+ * @brief Compute RGB from a segment_light_t state (same logic as EP1)
+ */
+static void segment_to_rgb(const segment_light_t *seg, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    if (!seg->on) {
+        *r = *g = *b = 0;
+        return;
+    }
+    if (seg->color_mode == 1) {
+        xy_to_rgb(seg->color_x, seg->color_y, r, g, b);
+    } else {
+        hsv_to_rgb(seg->hue, seg->saturation, 255, r, g, b);
+    }
+    *r = (uint8_t)((uint32_t)*r * seg->level / 254);
+    *g = (uint8_t)((uint32_t)*g * seg->level / 254);
+    *b = (uint8_t)((uint32_t)*b * seg->level / 254);
+}
+
+/**
  * @brief Update the physical LED strip based on current state
+ *
+ * Rendering order:
+ *   1. Base layer: EP1 RGB + EP2 white applied to all LEDs
+ *   2. Segment overlay: each enabled segment overrides its LED range
  */
 static void update_leds(void)
 {
@@ -343,24 +394,36 @@ static void update_leds(void)
     uint8_t r = 0, g = 0, b = 0;
 
     if (s_led_state.on) {
-        // Determine RGB from color mode
-        if (s_led_state.color_mode == 1) {  // XY mode
+        if (s_led_state.color_mode == 1) {
             xy_to_rgb(s_led_state.color_x, s_led_state.color_y, &r, &g, &b);
-        } else {  // HS mode (0) or fallback
+        } else {
             hsv_to_rgb(s_led_state.hue, s_led_state.saturation, 255, &r, &g, &b);
         }
-
-        // Apply RGB brightness
         r = (uint8_t)((uint32_t)r * s_led_state.level / 254);
         g = (uint8_t)((uint32_t)g * s_led_state.level / 254);
         b = (uint8_t)((uint32_t)b * s_led_state.level / 254);
     }
 
-    // White channel from endpoint 2 (independent)
     uint8_t w = s_led_state.white_on ? s_led_state.white_level : 0;
 
+    /* Base layer: full strip */
     for (uint16_t i = 0; i < g_led_count; i++) {
         led_strip_set_pixel_rgbw(g_led_strip, i, r, g, b, w);
+    }
+
+    /* Segment overlay */
+    segment_geom_t  *geom  = segment_geom_get();
+    segment_light_t *state = segment_state_get();
+    for (int n = 0; n < MAX_SEGMENTS; n++) {
+        if (geom[n].count == 0) continue;
+        uint8_t sr, sg, sb;
+        segment_to_rgb(&state[n], &sr, &sg, &sb);
+        uint8_t sw = state[n].on ? geom[n].white_level : 0;
+        uint16_t end = geom[n].start + geom[n].count;
+        if (end > g_led_count) end = g_led_count;
+        for (uint16_t i = geom[n].start; i < end; i++) {
+            led_strip_set_pixel_rgbw(g_led_strip, i, sr, sg, sb, sw);
+        }
     }
 
     led_strip_refresh(g_led_strip);
@@ -402,6 +465,33 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
         return ESP_OK;
     }
 
+    /* Custom segment config cluster 0xFC01 — start/count/white per segment */
+    if (cluster == ZB_CLUSTER_SEGMENT_CONFIG) {
+        if (attr_id < ZB_ATTR_SEG_BASE + MAX_SEGMENTS * 3) {
+            int offset = attr_id - ZB_ATTR_SEG_BASE;
+            int seg_idx = offset / 3;
+            int field   = offset % 3;
+            segment_geom_t *geom = segment_geom_get();
+            switch (field) {
+            case 0:
+                geom[seg_idx].start = *(uint16_t *)value;
+                ESP_LOGI(TAG, "Seg%d start -> %u", seg_idx, geom[seg_idx].start);
+                break;
+            case 1:
+                geom[seg_idx].count = *(uint16_t *)value;
+                ESP_LOGI(TAG, "Seg%d count -> %u", seg_idx, geom[seg_idx].count);
+                break;
+            case 2:
+                geom[seg_idx].white_level = *(uint8_t *)value;
+                ESP_LOGI(TAG, "Seg%d white -> %u", seg_idx, geom[seg_idx].white_level);
+                break;
+            }
+            segment_manager_save();
+            update_leds();
+        }
+        return ESP_OK;
+    }
+
     if (endpoint == ZB_WHITE_ENDPOINT) {
         /* Endpoint 2: White channel */
         if (cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
@@ -415,6 +505,50 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 s_led_state.white_level = *(uint8_t *)value;
                 ESP_LOGI(TAG, "White level -> %d", s_led_state.white_level);
                 needs_update = true;
+            }
+        }
+        if (needs_update) {
+            update_leds();
+            schedule_save();
+        }
+    } else if (endpoint >= ZB_SEGMENT_EP_BASE &&
+               endpoint < ZB_SEGMENT_EP_BASE + MAX_SEGMENTS) {
+        /* Endpoints 3-10: Segment lights */
+        int seg = endpoint - ZB_SEGMENT_EP_BASE;
+        segment_light_t *state = segment_state_get();
+        if (cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+            if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+                state[seg].on = *(bool *)value;
+                ESP_LOGI(TAG, "Seg%d On/Off -> %s", seg, state[seg].on ? "ON" : "OFF");
+                needs_update = true;
+            }
+        } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL) {
+            if (attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID) {
+                state[seg].level = *(uint8_t *)value;
+                ESP_LOGI(TAG, "Seg%d level -> %d", seg, state[seg].level);
+                needs_update = true;
+            }
+        } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL) {
+            if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID) {
+                state[seg].hue = zcl_hue_to_degrees(*(uint8_t *)value);
+                state[seg].color_mode = 0;
+                schedule_color_update();
+            } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID) {
+                uint16_t eh = *(uint16_t *)value;
+                state[seg].hue = (uint16_t)((uint32_t)eh * 360 / 65535);
+                state[seg].color_mode = 0;
+                schedule_color_update();
+            } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID) {
+                state[seg].saturation = *(uint8_t *)value;
+                schedule_color_update();
+            } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID) {
+                state[seg].color_x = *(uint16_t *)value;
+                state[seg].color_mode = 1;
+                schedule_color_update();
+            } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID) {
+                state[seg].color_y = *(uint16_t *)value;
+                state[seg].color_mode = 1;
+                schedule_color_update();
             }
         }
         if (needs_update) {

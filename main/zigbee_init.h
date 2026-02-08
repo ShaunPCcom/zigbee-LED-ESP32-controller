@@ -34,9 +34,14 @@ extern "C" {
 /**
  * @brief Custom cluster IDs
  * 0xFC00: Device configuration (led_count attribute)
+ * 0xFC01: Segment configuration (start/count/white per segment)
  */
 #define ZB_CLUSTER_DEVICE_CONFIG        0xFC00
 #define ZB_ATTR_LED_COUNT               0x0000
+
+#define ZB_CLUSTER_SEGMENT_CONFIG       0xFC01
+/* Attributes: for segment N (0-7): base + N*3 + 0 = start, +1 = count, +2 = white */
+#define ZB_ATTR_SEG_BASE                0x0000
 
 /**
  * @brief Initialize Zigbee stack and create device

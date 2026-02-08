@@ -7,6 +7,8 @@
 
 #include "zigbee_init.h"
 #include "zigbee_handlers.h"
+#include "board_config.h"
+#include "segment_manager.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "ha/esp_zigbee_ha_standard.h"
@@ -97,6 +99,24 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     esp_zb_custom_cluster_add_custom_attr(custom_cfg, ZB_ATTR_LED_COUNT,
         ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &led_count_val);
 
+    /* Custom segment config cluster 0xFC01 — 24 attributes (3 per segment × 8) */
+    esp_zb_attribute_list_t *seg_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_SEGMENT_CONFIG);
+    segment_geom_t *geom = segment_geom_get();
+    uint16_t zero16 = 0;
+    uint8_t  zero8  = 0;
+    for (int n = 0; n < MAX_SEGMENTS; n++) {
+        uint16_t start_attr = ZB_ATTR_SEG_BASE + (uint16_t)(n * 3 + 0);
+        uint16_t count_attr = ZB_ATTR_SEG_BASE + (uint16_t)(n * 3 + 1);
+        uint16_t white_attr = ZB_ATTR_SEG_BASE + (uint16_t)(n * 3 + 2);
+        (void)zero16; (void)zero8;
+        esp_zb_custom_cluster_add_custom_attr(seg_cfg, start_attr,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &geom[n].start);
+        esp_zb_custom_cluster_add_custom_attr(seg_cfg, count_attr,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &geom[n].count);
+        esp_zb_custom_cluster_add_custom_attr(seg_cfg, white_attr,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &geom[n].white_level);
+    }
+
     /* Create cluster list and add all clusters */
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
 
@@ -111,6 +131,8 @@ static esp_zb_cluster_list_t *create_led_clusters(void)
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_color_control_cluster(cluster_list, color,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cluster_list, custom_cfg,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cluster_list, seg_cfg,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
     return cluster_list;
@@ -156,6 +178,55 @@ static esp_zb_cluster_list_t *create_white_clusters(void)
 }
 
 /**
+ * @brief Create minimal Color Dimmable Light cluster list for a segment endpoint
+ */
+static esp_zb_cluster_list_t *create_segment_clusters(void)
+{
+    esp_zb_basic_cluster_cfg_t basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE,
+    };
+    esp_zb_attribute_list_t *basic = esp_zb_basic_cluster_create(&basic_cfg);
+
+    esp_zb_identify_cluster_cfg_t identify_cfg = {
+        .identify_time = ESP_ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE,
+    };
+    esp_zb_attribute_list_t *identify = esp_zb_identify_cluster_create(&identify_cfg);
+
+    esp_zb_on_off_cluster_cfg_t on_off_cfg = {
+        .on_off = ESP_ZB_ZCL_ON_OFF_ON_OFF_DEFAULT_VALUE,
+    };
+    esp_zb_attribute_list_t *on_off = esp_zb_on_off_cluster_create(&on_off_cfg);
+
+    esp_zb_level_cluster_cfg_t level_cfg = {
+        .current_level = 128,
+    };
+    esp_zb_attribute_list_t *level = esp_zb_level_cluster_create(&level_cfg);
+
+    /* Color control with HS + EnhancedHue */
+    esp_zb_attribute_list_t *color = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL);
+    uint8_t hue = 0, sat = 0, cmode = 0, ecmode = 0;
+    uint16_t ehue = 0, cx = 0x616B, cy = 0x607D;
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID, &hue);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &ehue);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID, &cx);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID, &cy);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &cmode);
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID, &ecmode);
+    uint16_t caps = 0x0001 | 0x0002;  /* HS | EnhancedHue */
+    esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_CAPABILITIES_ID, &caps);
+
+    esp_zb_cluster_list_t *cl = esp_zb_zcl_cluster_list_create();
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cl, basic, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cl, identify, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_on_off_cluster(cl, on_off, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_level_cluster(cl, level, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_color_control_cluster(cl, color, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    return cl;
+}
+
+/**
  * @brief Register Zigbee endpoints
  */
 static void zigbee_register_endpoints(void)
@@ -180,10 +251,23 @@ static void zigbee_register_endpoints(void)
     };
     ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_white_clusters(), ep2_cfg));
 
+    /* Endpoints 3-10: Virtual segments (Color Dimmable Light) */
+    for (int i = 0; i < MAX_SEGMENTS; i++) {
+        esp_zb_endpoint_config_t seg_cfg = {
+            .endpoint = (uint8_t)(ZB_SEGMENT_EP_BASE + i),
+            .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
+            .app_device_version = 0,
+        };
+        ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_segment_clusters(), seg_cfg));
+    }
+
     ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
 
     ESP_LOGI(TAG, "Registered EP%d as Color Dimmable Light (RGB)", ZB_LED_ENDPOINT);
     ESP_LOGI(TAG, "Registered EP%d as Dimmable Light (White channel)", ZB_WHITE_ENDPOINT);
+    ESP_LOGI(TAG, "Registered EP%d-%d as segment lights", ZB_SEGMENT_EP_BASE,
+             ZB_SEGMENT_EP_BASE + MAX_SEGMENTS - 1);
 }
 
 /**
