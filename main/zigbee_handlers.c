@@ -41,6 +41,7 @@ static esp_timer_handle_t s_save_timer = NULL;
 /* Forward declarations */
 static void update_leds(void);
 static void schedule_save(void);
+static void sync_zcl_from_state(void);
 static void restore_leds_cb(uint8_t param);
 static void reboot_cb(uint8_t param);
 
@@ -192,6 +193,56 @@ static void color_attr_poll_cb(uint8_t param)
     if (changed) { update_leds(); schedule_save(); }
 
     esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 50);
+}
+
+/* ================================================================== */
+/*  ZCL attribute store sync (called once after stack starts)         */
+/*  Pushes in-memory segment state (loaded from NVS) into the ZCL    */
+/*  attribute store so Z2M/HA see the correct values on reconnect.   */
+/* ================================================================== */
+
+static void sync_zcl_from_state(void)
+{
+    segment_light_t *state = segment_state_get();
+
+    for (int n = 0; n < MAX_SEGMENTS; n++) {
+        uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
+
+        uint8_t on = state[n].on ? 1 : 0;
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &on, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID,
+            &state[n].level, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID,
+            &state[n].color_mode, false);
+
+        uint8_t hue8 = (uint8_t)((uint32_t)state[n].hue * 254 / 360);
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID,
+            &hue8, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID,
+            &state[n].saturation, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID,
+            &state[n].color_x, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID,
+            &state[n].color_y, false);
+
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID,
+            &state[n].color_temp, false);
+    }
+
+    ESP_LOGI(TAG, "ZCL attribute store synced from saved state");
 }
 
 /* ================================================================== */
@@ -415,7 +466,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     switch (sig) {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
         ESP_LOGI(TAG, "Stack initialized, starting network steering");
-        segment_manager_load();
+        sync_zcl_from_state();
         board_led_set_state(BOARD_LED_PAIRING);
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
         esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 50);

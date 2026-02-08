@@ -58,6 +58,9 @@ void app_main(void)
     // Initialize segment manager — segment 1 defaults to full strip length
     // (must be after g_led_count is resolved from NVS)
     segment_manager_init(g_led_count);
+    // Load persisted geometry and state before Zigbee init so the custom
+    // cluster attributes are populated with the correct values at creation time.
+    segment_manager_load();
 
     // Initialize board LED (onboard WS2812 for status)
     board_led_init();
