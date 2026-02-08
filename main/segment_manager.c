@@ -26,10 +26,11 @@ void segment_manager_init(uint16_t default_count)
     s_geom[0].start = 0;
     s_geom[0].count = default_count;
 
-    /* Default light state: off, 50% brightness */
+    /* Default light state: off, 50% brightness, restore previous on reboot */
     for (int i = 0; i < MAX_SEGMENTS; i++) {
         s_state[i].level = 128;
-        s_state[i].color_temp = 250;  /* ~4000K neutral */
+        s_state[i].color_temp = 250;     /* ~4000K neutral */
+        s_state[i].startup_on_off = 0xFF; /* 0xFF = previous */
     }
 }
 
@@ -69,10 +70,26 @@ void segment_manager_load(void)
         ESP_LOGW(TAG, "seg_geom load error: %s", esp_err_to_name(err));
     }
 
-    sz = sizeof(s_state);
-    err = nvs_get_blob(h, NVS_KEY_STATE, s_state, &sz);
+    /* Load state into temp buffer to detect struct size mismatch.
+     * The struct gained startup_on_off; old blobs are 12 bytes/entry. */
+#define SEGMENT_STATE_V1_SIZE  12   /* sizeof old segment_light_t */
+    uint8_t state_tmp[sizeof(s_state)];
+    sz = sizeof(state_tmp);
+    err = nvs_get_blob(h, NVS_KEY_STATE, state_tmp, &sz);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Segment state loaded");
+        if (sz == sizeof(s_state)) {
+            memcpy(s_state, state_tmp, sizeof(s_state));
+            ESP_LOGI(TAG, "Segment state loaded");
+        } else if (sz == MAX_SEGMENTS * SEGMENT_STATE_V1_SIZE) {
+            for (int i = 0; i < MAX_SEGMENTS; i++) {
+                memcpy(&s_state[i], state_tmp + i * SEGMENT_STATE_V1_SIZE,
+                       SEGMENT_STATE_V1_SIZE);
+                s_state[i].startup_on_off = 0xFF;
+            }
+            ESP_LOGI(TAG, "Segment state migrated (v1 -> v2)");
+        } else {
+            ESP_LOGW(TAG, "Segment state format unrecognized (sz=%zu), using defaults", sz);
+        }
     } else if (err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(TAG, "seg_state load error: %s", esp_err_to_name(err));
     }

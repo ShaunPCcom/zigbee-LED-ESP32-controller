@@ -178,6 +178,8 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
         color: {modes: ['hs'], enhancedHue: true},
         colorTemp: {range: [153, 370]},
         endpointNames: [`seg${n}`],
+        powerOnBehavior: true,
+        effect: false,
     }));
 }
 

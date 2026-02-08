@@ -57,6 +57,19 @@ void app_main(void)
     segment_manager_init(g_strip_count[0]);
     segment_manager_load();
 
+    /* Apply per-segment power-on behavior (StartUpOnOff) */
+    {
+        segment_light_t *state = segment_state_get();
+        for (int i = 0; i < MAX_SEGMENTS; i++) {
+            switch (state[i].startup_on_off) {
+            case 0x00: state[i].on = false;       break;
+            case 0x01: state[i].on = true;        break;
+            case 0x02: state[i].on = !state[i].on; break;
+            default:   break;  /* 0xFF = previous, no change */
+            }
+        }
+    }
+
     /* Initialize board LED status (uses strip 0, pixels 0-2) */
     board_led_init();
     board_led_set_state(BOARD_LED_NOT_JOINED);

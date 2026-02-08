@@ -211,6 +211,10 @@ static void sync_zcl_from_state(void)
         esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &on, false);
 
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF,
+            &state[n].startup_on_off, false);
+
         esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID,
             &state[n].level, false);
@@ -359,6 +363,10 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 state[seg].on = *(bool *)value;
                 ESP_LOGI(TAG, "Seg%d on/off -> %s", seg + 1, state[seg].on ? "ON" : "OFF");
                 needs_update = true;
+            } else if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF) {
+                state[seg].startup_on_off = *(uint8_t *)value;
+                ESP_LOGI(TAG, "Seg%d startup_on_off -> 0x%02X", seg + 1, state[seg].startup_on_off);
+                schedule_save();
             }
         } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL) {
             if (attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID) {

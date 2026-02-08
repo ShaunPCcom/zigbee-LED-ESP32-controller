@@ -56,6 +56,7 @@ static esp_zb_attribute_list_t *create_color_cluster(void)
  */
 static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 {
+    segment_light_t *state = segment_state_get();
     esp_zb_basic_cluster_cfg_t basic_cfg = {
         .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
         .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE,
@@ -79,6 +80,9 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         .on_off = ESP_ZB_ZCL_ON_OFF_ON_OFF_DEFAULT_VALUE,
     };
     esp_zb_attribute_list_t *on_off = esp_zb_on_off_cluster_create(&on_off_cfg);
+    /* StartUpOnOff: power-on behavior (0=off, 1=on, 2=toggle, 0xFF=previous) */
+    uint8_t startup_val = state[seg_idx].startup_on_off;
+    esp_zb_on_off_cluster_add_attr(on_off, ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF, &startup_val);
 
     esp_zb_level_cluster_cfg_t level_cfg = {
         .current_level = 128,

@@ -33,16 +33,20 @@ typedef struct {
  * color_mode: 0=HS, 1=XY, 2=CT
  *   HS/XY -> RGB channels active, W=0
  *   CT    -> W channel active (level = brightness), RGB=0
+ *
+ * startup_on_off: ZCL StartUpOnOff (attr 0x4003)
+ *   0x00 = off, 0x01 = on, 0x02 = toggle, 0xFF = previous
  */
 typedef struct {
     bool     on;
-    uint8_t  level;       /* Brightness 0-254 */
-    uint16_t hue;         /* 0-360 degrees */
-    uint8_t  saturation;  /* 0-254 */
-    uint8_t  color_mode;  /* 0=HS, 1=XY, 2=CT */
-    uint16_t color_x;     /* CIE X (ZCL format) */
-    uint16_t color_y;     /* CIE Y (ZCL format) */
-    uint16_t color_temp;  /* Color temperature in mireds (CT mode) */
+    uint8_t  level;          /* Brightness 0-254 */
+    uint16_t hue;            /* 0-360 degrees */
+    uint8_t  saturation;     /* 0-254 */
+    uint8_t  color_mode;     /* 0=HS, 1=XY, 2=CT */
+    uint16_t color_x;        /* CIE X (ZCL format) */
+    uint16_t color_y;        /* CIE Y (ZCL format) */
+    uint16_t color_temp;     /* Color temperature in mireds (CT mode) */
+    uint8_t  startup_on_off; /* Power-on behavior (ZCL StartUpOnOff) */
 } segment_light_t;
 
 /**
