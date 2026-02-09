@@ -551,6 +551,11 @@ static void sync_zcl_deferred_cb(uint8_t param)
     sync_zcl_from_state();
 }
 
+void schedule_zcl_sync(void)
+{
+    esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);
+}
+
 static void restore_leds_cb(uint8_t param)
 {
     (void)param;

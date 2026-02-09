@@ -276,9 +276,10 @@ static void cli_task(void *arg)
                     }
                     if (preset_manager_recall(name)) {
                         printf("Preset '%s' applied\n", name);
-                        sync_zcl_from_state();
                         update_leds();
                         schedule_save();
+                        /* Defer ZCL sync to Zigbee task to avoid critical section mismatch */
+                        schedule_zcl_sync();
                     } else {
                         printf("Preset '%s' not found\n", name);
                     }

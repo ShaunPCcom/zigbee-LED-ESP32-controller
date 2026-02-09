@@ -73,6 +73,15 @@ void update_leds(void);
  */
 void schedule_save(void);
 
+/**
+ * @brief Schedule deferred ZCL sync from Zigbee task context
+ *
+ * Uses esp_zb_scheduler_alarm to defer sync_zcl_from_state() execution
+ * to Zigbee task, avoiding critical section mismatch when called from
+ * non-Zigbee tasks (e.g., CLI)
+ */
+void schedule_zcl_sync(void);
+
 #ifdef __cplusplus
 }
 #endif
