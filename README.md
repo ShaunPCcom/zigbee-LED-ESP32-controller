@@ -79,6 +79,180 @@ Each of the 8 segments has three attributes:
 | `segN_count` | Number of LEDs (0 = disabled) |
 | `segN_strip` | Physical strip assignment (1 or 2) |
 
+## Preset Management
+
+The controller supports up to 8 saved presets (slots 0-7) that capture the complete state of all 8 segments (on/off, brightness, color, white temperature). Presets are stored in NVS flash and survive reboots.
+
+### Overview
+
+Each preset slot stores:
+- Custom name (up to 16 characters, optional)
+- All 8 segment states (on/off, brightness, RGB color, CT/white mode)
+- Persistent across power cycles and firmware updates
+
+Slot numbers (0-7) are stable identifiers designed for reliable Home Assistant automations. Names are metadata for human readability.
+
+### Workflow
+
+**1. Configure your desired lighting scene**
+- Use Home Assistant or Z2M to set segment colors, brightness, and on/off states
+- Adjust as many segments as needed (segments can be on or off)
+
+**2. Save the preset**
+- Select a slot number (0-7) in the Z2M UI or HA
+- Optionally provide a custom name (e.g., "Evening", "Movie", "Work")
+- Click "Save Preset"
+
+**3. Recall the preset**
+- Select the slot number
+- Click "Apply Preset"
+- All segments instantly change to the saved state (including turning on if they were off)
+- Home Assistant UI updates automatically after ~500ms
+
+**4. Delete a preset** (optional)
+- Select the slot number
+- Click "Delete Preset"
+- Slot becomes empty and available for reuse
+
+### Using Presets in Home Assistant Automations
+
+Presets are designed for WLED-style pattern usage in HA automations. Use slot numbers as stable identifiers:
+
+```yaml
+# Example: Activate preset slot 0 ("Evening") at sunset
+automation:
+  - alias: "Evening Lights"
+    trigger:
+      - platform: sun
+        event: sunset
+    action:
+      - service: number.set_value
+        target:
+          entity_id: number.zb_led_ctrl_preset_slot
+        data:
+          value: 0
+      - service: select.select_option
+        target:
+          entity_id: select.zb_led_ctrl_apply_preset
+        data:
+          option: "Apply"
+
+# Example: Morning routine with preset slot 1 ("Morning")
+automation:
+  - alias: "Morning Lights"
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      - service: number.set_value
+        target:
+          entity_id: number.zb_led_ctrl_preset_slot
+        data:
+          value: 1
+      - service: select.select_option
+        target:
+          entity_id: select.zb_led_ctrl_apply_preset
+        data:
+          option: "Apply"
+
+# Example: Movie mode with preset slot 2
+automation:
+  - alias: "Movie Mode"
+    trigger:
+      - platform: state
+        entity_id: media_player.living_room_tv
+        to: "playing"
+    action:
+      - service: number.set_value
+        target:
+          entity_id: number.zb_led_ctrl_preset_slot
+        data:
+          value: 2
+      - service: select.select_option
+        target:
+          entity_id: select.zb_led_ctrl_apply_preset
+        data:
+          option: "Apply"
+```
+
+**Why slot numbers instead of names?**
+- Slot numbers (0-7) never change, making automations reliable
+- Names can be changed without breaking automations
+- Follows WLED's proven pattern for preset management
+
+### Zigbee2MQTT UI Usage
+
+**Preset Controls (in device page):**
+- **Preset Slot** — dropdown to select slot 0-7
+- **Apply Preset** — button to recall selected slot
+- **Delete Preset** — button to delete selected slot
+- **New Preset Name** — text field for custom name (optional, max 16 chars)
+- **Save Preset** — button to save current state to selected slot
+
+**Preset Slot Names (sensors):**
+- **Slot 0-7 Name** — displays name or "(empty)" for each slot
+
+**Workflow:**
+1. Configure lighting in HA/Z2M
+2. Select slot number from dropdown
+3. Enter custom name (optional)
+4. Click "Save Preset"
+5. Later: select slot and click "Apply Preset" to recall
+
+### Custom Zigbee Cluster (0xFC02)
+
+**Preset management attributes (on EP1):**
+
+| Attribute | ID | Type | Access | Purpose |
+|-----------|-----|------|--------|---------|
+| `preset_count` | 0x0000 | U8 | R | Number of occupied slots (0-8) |
+| `recall_slot` | 0x0020 | U8 | W | Write slot number (0-7) to recall |
+| `save_slot` | 0x0021 | U8 | W | Write slot number (0-7) to save |
+| `delete_slot` | 0x0022 | U8 | W | Write slot number (0-7) to delete |
+| `save_name` | 0x0023 | CharString | W | Write name before save (optional) |
+| `preset_0_name` | 0x0010 | CharString | R | Name of preset in slot 0 |
+| `preset_1_name` | 0x0011 | CharString | R | Name of preset in slot 1 |
+| ... | ... | ... | ... | ... |
+| `preset_7_name` | 0x0017 | CharString | R | Name of preset in slot 7 |
+
+**Deprecated attributes (kept for backwards compatibility):**
+- `active_preset` (0x0001) — always returns empty string
+- `recall_preset` (0x0002) — name-based recall (use `recall_slot` instead)
+- `save_preset` (0x0003) — name-based save (use `save_slot` instead)
+- `delete_preset` (0x0004) — name-based delete (use `delete_slot` instead)
+
+### CLI Commands
+
+```bash
+# List all preset slots
+led preset
+
+# Save current state to slot 3 with name "Evening"
+led preset save 3 Evening
+
+# Recall preset from slot 3
+led preset apply 3
+
+# Delete preset from slot 3
+led preset delete 3
+
+# Save to slot 0 without custom name (uses default "Preset 1")
+led preset save 0
+```
+
+### Migration Notes
+
+**From name-based presets (pre-v2):**
+- Existing presets with names are automatically preserved in slots 0-7
+- Slots without presets get default names ("Preset 1" through "Preset 8")
+- Migration happens transparently on first boot after firmware update
+- No user action required
+
+**NVS storage:**
+- Namespace: `led_cfg`
+- Keys: `prst_0` through `prst_7` (129 bytes each)
+- Version flag: `prst_version` (value 2 for slot-based)
+
 ## CLI Reference
 
 Connect via serial monitor (`idf.py -p /dev/ttyACM0 monitor`). All commands are prefixed with `led `.
@@ -92,6 +266,10 @@ Connect via serial monitor (`idf.py -p /dev/ttyACM0 monitor`). All commands are 
 | `led seg <n> start <val>` | Set segment start index |
 | `led seg <n> count <val>` | Set segment LED count (0 disables) |
 | `led seg <n> strip <val>` | Assign segment to strip 1 or 2 |
+| `led preset` | List all preset slots with names and status |
+| `led preset save <slot> [name]` | Save current state to slot 0-7 (optional name) |
+| `led preset apply <slot>` | Recall preset from slot 0-7 |
+| `led preset delete <slot>` | Delete preset from slot 0-7 |
 | `led nvs` | NVS health check |
 | `led reboot` | Restart device |
 | `led repair` | Zigbee network reset (keeps config) |
