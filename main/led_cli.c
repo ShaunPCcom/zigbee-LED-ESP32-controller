@@ -41,10 +41,10 @@ static void print_help(void)
         "  led seg <1-8> start <n>    (set start LED index)\n"
         "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
         "  led seg <1-8> strip <n>    (set physical strip, 1 or 2)\n"
-        "  led preset                 (list all presets)\n"
-        "  led preset save <name>     (save current state as preset)\n"
-        "  led preset apply <name>    (recall preset by name)\n"
-        "  led preset delete <name>   (delete preset by name)\n"
+        "  led preset                 (list all preset slots)\n"
+        "  led preset save <slot> [name]  (save current state to slot 0-7)\n"
+        "  led preset apply <slot>    (recall preset from slot 0-7)\n"
+        "  led preset delete <slot>   (delete preset from slot 0-7)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
         "  led repair                 (Zigbee network reset / re-pair)\n"
@@ -237,65 +237,74 @@ static void cli_task(void *arg)
                 char *subcmd = strtok(NULL, " \t\r\n");
                 if (!subcmd) {
                     /* List all presets */
-                    int count = preset_manager_count();
-                    printf("Stored presets: %d/%d\n", count, MAX_PRESETS);
-                    if (count > 0) {
-                        char name[PRESET_NAME_MAX + 1];
-                        for (int i = 0; i < MAX_PRESETS; i++) {
-                            if (preset_manager_get_name(i, name, sizeof(name))) {
-                                printf("  [%d] %s\n", i, name);
-                            }
-                        }
-                    }
-                    const char *active = preset_manager_get_active();
-                    if (active[0] != '\0') {
-                        printf("Active preset: %s\n", active);
-                    }
+                    preset_manager_list_presets();
                     continue;
                 }
 
                 if (strcmp(subcmd, "save") == 0) {
-                    char *name = strtok(NULL, " \t\r\n");
-                    if (!name) {
-                        printf("usage: led preset save <name>\n");
+                    char *slot_str = strtok(NULL, " \t\r\n");
+                    if (!slot_str) {
+                        printf("usage: led preset save <slot> [name]\n");
                         continue;
                     }
-                    if (preset_manager_save(name)) {
-                        printf("Preset '%s' saved\n", name);
+                    int slot = atoi(slot_str);
+                    if (slot < 0 || slot >= MAX_PRESET_SLOTS) {
+                        printf("error: slot must be 0-%d\n", MAX_PRESET_SLOTS - 1);
+                        continue;
+                    }
+                    char *name = strtok(NULL, "\r\n");  /* Get rest of line for name */
+                    while (name && isspace((unsigned char)*name)) name++;  /* Skip leading spaces */
+                    esp_err_t err = preset_manager_save((uint8_t)slot, name);
+                    if (err == ESP_OK) {
+                        printf("Preset saved to slot %d\n", slot);
                     } else {
-                        printf("Failed to save preset '%s'\n", name);
+                        printf("Failed to save preset: %s\n", esp_err_to_name(err));
                     }
                     continue;
                 }
 
                 if (strcmp(subcmd, "apply") == 0) {
-                    char *name = strtok(NULL, " \t\r\n");
-                    if (!name) {
-                        printf("usage: led preset apply <name>\n");
+                    char *slot_str = strtok(NULL, " \t\r\n");
+                    if (!slot_str) {
+                        printf("usage: led preset apply <slot>\n");
                         continue;
                     }
-                    if (preset_manager_recall(name)) {
-                        printf("Preset '%s' applied\n", name);
+                    int slot = atoi(slot_str);
+                    if (slot < 0 || slot >= MAX_PRESET_SLOTS) {
+                        printf("error: slot must be 0-%d\n", MAX_PRESET_SLOTS - 1);
+                        continue;
+                    }
+                    esp_err_t err = preset_manager_recall((uint8_t)slot);
+                    if (err == ESP_OK) {
+                        printf("Preset applied from slot %d\n", slot);
                         update_leds();
                         schedule_save();
                         /* Defer ZCL sync to Zigbee task to avoid critical section mismatch */
                         schedule_zcl_sync();
+                    } else if (err == ESP_ERR_NOT_FOUND) {
+                        printf("Slot %d is empty\n", slot);
                     } else {
-                        printf("Preset '%s' not found\n", name);
+                        printf("Failed to apply preset: %s\n", esp_err_to_name(err));
                     }
                     continue;
                 }
 
                 if (strcmp(subcmd, "delete") == 0) {
-                    char *name = strtok(NULL, " \t\r\n");
-                    if (!name) {
-                        printf("usage: led preset delete <name>\n");
+                    char *slot_str = strtok(NULL, " \t\r\n");
+                    if (!slot_str) {
+                        printf("usage: led preset delete <slot>\n");
                         continue;
                     }
-                    if (preset_manager_delete(name)) {
-                        printf("Preset '%s' deleted\n", name);
+                    int slot = atoi(slot_str);
+                    if (slot < 0 || slot >= MAX_PRESET_SLOTS) {
+                        printf("error: slot must be 0-%d\n", MAX_PRESET_SLOTS - 1);
+                        continue;
+                    }
+                    esp_err_t err = preset_manager_delete((uint8_t)slot);
+                    if (err == ESP_OK) {
+                        printf("Preset deleted from slot %d\n", slot);
                     } else {
-                        printf("Preset '%s' not found\n", name);
+                        printf("Failed to delete preset: %s\n", esp_err_to_name(err));
                     }
                     continue;
                 }

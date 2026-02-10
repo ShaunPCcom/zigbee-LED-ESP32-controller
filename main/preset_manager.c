@@ -1,12 +1,13 @@
 /**
  * @file preset_manager.c
- * @brief Manage named presets for segment states
+ * @brief Manage slot-based presets for segment states
  *
  * NVS storage (namespace "led_cfg"):
  *   "prst_0" through "prst_7": blob, each 129 bytes
  *     - 1 byte:  name length (0-16)
- *     - 16 bytes: name (null-padded)
+ *     - 16 bytes: name (UTF-8, no null terminator)
  *     - 112 bytes: 8 × segment_light_t (14 bytes each)
+ *   "prst_version": u8, version flag (2 = slot-based)
  */
 
 #include "preset_manager.h"
@@ -14,191 +15,225 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "preset";
 
-#define NVS_NAMESPACE    "led_cfg"
-#define PRESET_BLOB_SIZE (1 + PRESET_NAME_MAX + MAX_SEGMENTS * sizeof(segment_light_t))
+#define NVS_NAMESPACE     "led_cfg"
+#define NVS_VERSION_KEY   "prst_version"
+#define PRESET_VERSION_V2 2
+#define PRESET_BLOB_SIZE  (1 + PRESET_NAME_MAX + MAX_SEGMENTS * sizeof(segment_light_t))
 
 typedef struct {
-    uint8_t name_len;
+    uint8_t name_length;
     char name[PRESET_NAME_MAX];
-    segment_light_t states[MAX_SEGMENTS];
-} preset_blob_t;
+    segment_light_t segments[MAX_SEGMENTS];
+} preset_slot_t;
 
-static preset_blob_t s_presets[MAX_PRESETS];
-static char s_active_preset[PRESET_NAME_MAX + 1] = "";
+static preset_slot_t s_slots[MAX_PRESET_SLOTS];
 
-static const char *s_nvs_keys[MAX_PRESETS] = {
+static const char *s_nvs_keys[MAX_PRESET_SLOTS] = {
     "prst_0", "prst_1", "prst_2", "prst_3",
     "prst_4", "prst_5", "prst_6", "prst_7"
 };
 
-void preset_manager_init(void)
+/**
+ * @brief Migrate legacy name-based presets to slot-based with default names
+ */
+static esp_err_t migrate_legacy_presets(nvs_handle_t h)
 {
-    memset(s_presets, 0, sizeof(s_presets));
+    ESP_LOGI(TAG, "Migrating legacy presets to slot-based (version 2)");
 
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Cannot open NVS for preset load: %s", esp_err_to_name(err));
-        return;
+    /* Check if any legacy presets exist */
+    int migrated_count = 0;
+    for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+        size_t sz = sizeof(preset_slot_t);
+        esp_err_t err = nvs_get_blob(h, s_nvs_keys[i], &s_slots[i], &sz);
+        if (err == ESP_OK && sz == sizeof(preset_slot_t)) {
+            if (s_slots[i].name_length > 0 && s_slots[i].name_length <= PRESET_NAME_MAX) {
+                ESP_LOGI(TAG, "  Slot %d: preserved existing preset '%.*s'", i,
+                         s_slots[i].name_length, s_slots[i].name);
+                migrated_count++;
+            } else {
+                memset(&s_slots[i], 0, sizeof(preset_slot_t));
+            }
+        } else {
+            /* No legacy data, initialize with default name */
+            memset(&s_slots[i], 0, sizeof(preset_slot_t));
+            char default_name[PRESET_NAME_MAX + 1];
+            int len = snprintf(default_name, sizeof(default_name), "Preset %d", i + 1);
+            s_slots[i].name_length = (uint8_t)len;
+            memcpy(s_slots[i].name, default_name, len);
+            ESP_LOGI(TAG, "  Slot %d: initialized with default name '%s'", i, default_name);
+        }
     }
 
-    for (int i = 0; i < MAX_PRESETS; i++) {
-        size_t sz = sizeof(preset_blob_t);
-        err = nvs_get_blob(h, s_nvs_keys[i], &s_presets[i], &sz);
-        if (err == ESP_OK && sz == sizeof(preset_blob_t)) {
-            if (s_presets[i].name_len > 0 && s_presets[i].name_len <= PRESET_NAME_MAX) {
-                ESP_LOGI(TAG, "Loaded preset %d: %.*s", i,
-                         s_presets[i].name_len, s_presets[i].name);
-            } else {
-                memset(&s_presets[i], 0, sizeof(preset_blob_t));
+    ESP_LOGI(TAG, "Migration complete: %d presets preserved, %d initialized",
+             migrated_count, MAX_PRESET_SLOTS - migrated_count);
+    return ESP_OK;
+}
+
+esp_err_t preset_manager_init(void)
+{
+    memset(s_slots, 0, sizeof(s_slots));
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot open NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Check version flag */
+    uint8_t version = 0;
+    err = nvs_get_u8(h, NVS_VERSION_KEY, &version);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND || version < PRESET_VERSION_V2) {
+        /* Migration needed */
+        err = migrate_legacy_presets(h);
+        if (err != ESP_OK) {
+            nvs_close(h);
+            return err;
+        }
+
+        /* Set version flag */
+        err = nvs_set_u8(h, NVS_VERSION_KEY, PRESET_VERSION_V2);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set version flag: %s", esp_err_to_name(err));
+            nvs_close(h);
+            return err;
+        }
+    } else {
+        /* Version 2, load slots directly */
+        for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+            size_t sz = sizeof(preset_slot_t);
+            err = nvs_get_blob(h, s_nvs_keys[i], &s_slots[i], &sz);
+            if (err == ESP_OK && sz == sizeof(preset_slot_t)) {
+                if (s_slots[i].name_length > 0 && s_slots[i].name_length <= PRESET_NAME_MAX) {
+                    ESP_LOGI(TAG, "Loaded slot %d: %.*s", i,
+                             s_slots[i].name_length, s_slots[i].name);
+                } else {
+                    memset(&s_slots[i], 0, sizeof(preset_slot_t));
+                }
             }
         }
     }
 
     nvs_close(h);
-    ESP_LOGI(TAG, "Preset manager initialized, %d presets loaded", preset_manager_count());
+    ESP_LOGI(TAG, "Preset manager initialized (version %d)", PRESET_VERSION_V2);
+    return ESP_OK;
 }
 
-int preset_manager_count(void)
+esp_err_t preset_manager_save(uint8_t slot, const char *name)
 {
-    int count = 0;
-    for (int i = 0; i < MAX_PRESETS; i++) {
-        if (s_presets[i].name_len > 0) {
-            count++;
-        }
-    }
-    return count;
-}
-
-static int find_preset_by_name(const char *name)
-{
-    if (!name || name[0] == '\0') return -1;
-
-    size_t len = strlen(name);
-    if (len > PRESET_NAME_MAX) return -1;
-
-    for (int i = 0; i < MAX_PRESETS; i++) {
-        if (s_presets[i].name_len == len &&
-            memcmp(s_presets[i].name, name, len) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static int find_empty_slot(void)
-{
-    for (int i = 0; i < MAX_PRESETS; i++) {
-        if (s_presets[i].name_len == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-bool preset_manager_save(const char *name)
-{
-    if (!name || name[0] == '\0') {
-        ESP_LOGW(TAG, "Cannot save preset: empty name");
-        return false;
+    /* Validate slot range */
+    if (slot >= MAX_PRESET_SLOTS) {
+        ESP_LOGE(TAG, "Invalid slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
     }
 
-    size_t len = strlen(name);
-    if (len > PRESET_NAME_MAX) {
-        ESP_LOGW(TAG, "Cannot save preset: name too long (%zu > %d)", len, PRESET_NAME_MAX);
-        return false;
-    }
-
-    /* Find existing preset with same name, or empty slot */
-    int slot = find_preset_by_name(name);
-    if (slot < 0) {
-        slot = find_empty_slot();
-        if (slot < 0) {
-            ESP_LOGW(TAG, "Cannot save preset: all %d slots full", MAX_PRESETS);
-            return false;
-        }
-    }
-
-    /* Save current segment states (skip startup_on_off field) */
+    /* Get current segment states */
     segment_light_t *states = segment_state_get();
-    s_presets[slot].name_len = (uint8_t)len;
-    memcpy(s_presets[slot].name, name, len);
-    memset(s_presets[slot].name + len, 0, PRESET_NAME_MAX - len);
-    memcpy(s_presets[slot].states, states, sizeof(segment_light_t) * MAX_SEGMENTS);
+    if (!states) {
+        ESP_LOGE(TAG, "Failed to get segment states");
+        return ESP_FAIL;
+    }
+
+    /* Set name (use provided name or default "Preset N") */
+    char preset_name[PRESET_NAME_MAX + 1];
+    size_t len;
+    if (name && name[0] != '\0') {
+        len = strlen(name);
+        if (len > PRESET_NAME_MAX) {
+            len = PRESET_NAME_MAX;
+        }
+        memcpy(preset_name, name, len);
+    } else {
+        len = snprintf(preset_name, sizeof(preset_name), "Preset %d", slot + 1);
+    }
+
+    /* Build preset slot structure */
+    s_slots[slot].name_length = (uint8_t)len;
+    memcpy(s_slots[slot].name, preset_name, len);
+    memset(s_slots[slot].name + len, 0, PRESET_NAME_MAX - len); /* Zero-pad unused bytes */
+    memcpy(s_slots[slot].segments, states, sizeof(segment_light_t) * MAX_SEGMENTS);
 
     /* Write to NVS */
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
-        return false;
+        return err;
     }
 
-    err = nvs_set_blob(h, s_nvs_keys[slot], &s_presets[slot], sizeof(preset_blob_t));
+    err = nvs_set_blob(h, s_nvs_keys[slot], &s_slots[slot], sizeof(preset_slot_t));
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
     nvs_close(h);
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save preset '%s': %s", name, esp_err_to_name(err));
-        return false;
+        ESP_LOGE(TAG, "Failed to save preset to slot %d: %s", slot, esp_err_to_name(err));
+        return err;
     }
 
-    ESP_LOGI(TAG, "Saved preset '%s' to slot %d", name, slot);
-    return true;
+    ESP_LOGI(TAG, "Saved preset '%.*s' to slot %d", len, preset_name, slot);
+    return ESP_OK;
 }
 
-bool preset_manager_recall(const char *name)
+esp_err_t preset_manager_recall(uint8_t slot)
 {
-    int slot = find_preset_by_name(name);
-    if (slot < 0) {
-        ESP_LOGW(TAG, "Preset '%s' not found", name);
-        return false;
+    /* Validate slot range */
+    if (slot >= MAX_PRESET_SLOTS) {
+        ESP_LOGE(TAG, "Invalid slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if slot is occupied */
+    if (s_slots[slot].name_length == 0) {
+        ESP_LOGW(TAG, "Slot %d is empty", slot);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Get current segment states */
+    segment_light_t *states = segment_state_get();
+    if (!states) {
+        ESP_LOGE(TAG, "Failed to get segment states");
+        return ESP_FAIL;
     }
 
     /* Copy stored states to segment manager (preserve startup_on_off) */
-    segment_light_t *states = segment_state_get();
     for (int i = 0; i < MAX_SEGMENTS; i++) {
         uint8_t saved_startup = states[i].startup_on_off;
-        memcpy(&states[i], &s_presets[slot].states[i], sizeof(segment_light_t));
+        memcpy(&states[i], &s_slots[slot].segments[i], sizeof(segment_light_t));
         states[i].startup_on_off = saved_startup;
     }
 
-    /* Update active preset name */
-    size_t len = s_presets[slot].name_len;
-    memcpy(s_active_preset, s_presets[slot].name, len);
-    s_active_preset[len] = '\0';
-
-    ESP_LOGI(TAG, "Recalled preset '%s' from slot %d", name, slot);
-    return true;
+    ESP_LOGI(TAG, "Recalled preset '%.*s' from slot %d",
+             s_slots[slot].name_length, s_slots[slot].name, slot);
+    return ESP_OK;
 }
 
-bool preset_manager_delete(const char *name)
+esp_err_t preset_manager_delete(uint8_t slot)
 {
-    int slot = find_preset_by_name(name);
-    if (slot < 0) {
-        ESP_LOGW(TAG, "Preset '%s' not found", name);
-        return false;
+    /* Validate slot range */
+    if (slot >= MAX_PRESET_SLOTS) {
+        ESP_LOGE(TAG, "Invalid slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
     }
 
     /* Clear slot in memory */
-    memset(&s_presets[slot], 0, sizeof(preset_blob_t));
-
-    /* Clear active preset if it was this one */
-    if (strcmp(s_active_preset, name) == 0) {
-        s_active_preset[0] = '\0';
-    }
+    memset(&s_slots[slot], 0, sizeof(preset_slot_t));
 
     /* Erase from NVS */
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
-        return false;
+        return err;
     }
 
     err = nvs_erase_key(h, s_nvs_keys[slot]);
@@ -208,35 +243,180 @@ bool preset_manager_delete(const char *name)
     nvs_close(h);
 
     if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGE(TAG, "Failed to delete preset '%s': %s", name, esp_err_to_name(err));
-        return false;
+        ESP_LOGE(TAG, "Failed to delete slot %d: %s", slot, esp_err_to_name(err));
+        return err;
     }
 
-    ESP_LOGI(TAG, "Deleted preset '%s' from slot %d", name, slot);
-    return true;
+    ESP_LOGI(TAG, "Deleted preset from slot %d", slot);
+    return ESP_OK;
 }
 
+esp_err_t preset_manager_get_slot_name(uint8_t slot, char *name_out, size_t max_len)
+{
+    /* Validate parameters */
+    if (slot >= MAX_PRESET_SLOTS) {
+        ESP_LOGE(TAG, "Invalid slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!name_out || max_len == 0) {
+        ESP_LOGE(TAG, "Invalid output buffer");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if slot is occupied */
+    if (s_slots[slot].name_length == 0) {
+        name_out[0] = '\0';
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Copy name to output buffer with null terminator */
+    size_t copy_len = s_slots[slot].name_length;
+    if (copy_len >= max_len) {
+        copy_len = max_len - 1;
+    }
+    memcpy(name_out, s_slots[slot].name, copy_len);
+    name_out[copy_len] = '\0';
+
+    return ESP_OK;
+}
+
+esp_err_t preset_manager_is_slot_occupied(uint8_t slot, bool *is_occupied)
+{
+    /* Validate parameters */
+    if (slot >= MAX_PRESET_SLOTS) {
+        ESP_LOGE(TAG, "Invalid slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!is_occupied) {
+        ESP_LOGE(TAG, "is_occupied pointer is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if name_length > 0 indicates occupied slot */
+    *is_occupied = (s_slots[slot].name_length > 0);
+
+    return ESP_OK;
+}
+
+void preset_manager_list_presets(void)
+{
+    printf("=== Preset Slots ===\n");
+    for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+        bool occupied = (s_slots[i].name_length > 0);
+        if (occupied) {
+            printf("  [%d] %.*s (occupied)\n", i,
+                   s_slots[i].name_length, s_slots[i].name);
+        } else {
+            printf("  [%d] (empty)\n", i);
+        }
+    }
+}
+
+/* ================================================================== */
+/*  Compatibility functions for Zigbee handlers (deprecated)          */
+/*  Kept for backwards compatibility with old Z2M converters          */
+/* ================================================================== */
+
+/**
+ * @brief Get count of occupied preset slots (compatibility for Zigbee)
+ * @return Number of occupied slots (0-8)
+ */
+int preset_manager_count(void)
+{
+    int count = 0;
+    for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+        if (s_slots[i].name_length > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * @brief Stub for active preset (compatibility for Zigbee)
+ * @return Empty string (active preset tracking removed in v2)
+ */
 const char *preset_manager_get_active(void)
 {
-    return s_active_preset;
+    static const char empty[] = "";
+    return empty;
 }
 
-bool preset_manager_get_name(int slot, char *buf, size_t len)
+/**
+ * @brief Find slot by name (compatibility bridge for Zigbee)
+ * @param name Preset name to search for
+ * @return Slot index (0-7) or -1 if not found
+ */
+static int find_slot_by_name(const char *name)
 {
-    if (slot < 0 || slot >= MAX_PRESETS || !buf || len == 0) {
+    if (!name || name[0] == '\0') return -1;
+
+    size_t len = strlen(name);
+    if (len > PRESET_NAME_MAX) return -1;
+
+    for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+        if (s_slots[i].name_length == len &&
+            memcmp(s_slots[i].name, name, len) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief Recall preset by name (deprecated, kept for backwards compatibility)
+ * @param name Preset name
+ * @return true on success, false on error
+ */
+bool preset_manager_recall_by_name(const char *name)
+{
+    int slot = find_slot_by_name(name);
+    if (slot < 0) {
+        return false;
+    }
+    return (preset_manager_recall((uint8_t)slot) == ESP_OK);
+}
+
+/**
+ * @brief Save preset by name (deprecated, kept for backwards compatibility)
+ * @param name Preset name
+ * @return true on success, false on error
+ */
+bool preset_manager_save_by_name(const char *name)
+{
+    /* Try to find existing slot with this name */
+    int slot = find_slot_by_name(name);
+
+    /* If not found, find first empty slot */
+    if (slot < 0) {
+        for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+            if (s_slots[i].name_length == 0) {
+                slot = i;
+                break;
+            }
+        }
+    }
+
+    /* All slots full */
+    if (slot < 0) {
         return false;
     }
 
-    if (s_presets[slot].name_len > 0) {
-        size_t copy_len = s_presets[slot].name_len;
-        if (copy_len >= len) {
-            copy_len = len - 1;
-        }
-        memcpy(buf, s_presets[slot].name, copy_len);
-        buf[copy_len] = '\0';
-        return true;
-    }
+    return (preset_manager_save((uint8_t)slot, name) == ESP_OK);
+}
 
-    buf[0] = '\0';
-    return false;
+/**
+ * @brief Delete preset by name (deprecated, kept for backwards compatibility)
+ * @param name Preset name
+ * @return true on success, false on error
+ */
+bool preset_manager_delete_by_name(const char *name)
+{
+    int slot = find_slot_by_name(name);
+    if (slot < 0) {
+        return false;
+    }
+    return (preset_manager_delete((uint8_t)slot) == ESP_OK);
 }

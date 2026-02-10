@@ -1,8 +1,8 @@
 /**
  * @file preset_manager.h
- * @brief Manage named presets for segment states
+ * @brief Manage slot-based presets for segment states
  *
- * Saves/recalls all 8 segment states as named presets. Max 8 presets.
+ * Saves/recalls all 8 segment states as slot-based presets. 8 preset slots (0-7).
  * Each preset stores name + 8 segment_light_t structs in NVS.
  */
 
@@ -12,60 +12,103 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define MAX_PRESETS      8
+#define MAX_PRESET_SLOTS 8
 #define PRESET_NAME_MAX  16
 
 /**
- * @brief Initialize preset manager and load presets from NVS
+ * @brief Initialize preset manager, perform migration if needed
+ * @return ESP_OK on success, error code otherwise
  */
-void preset_manager_init(void);
+esp_err_t preset_manager_init(void);
 
 /**
- * @brief Get number of stored presets
- * @return Count of non-empty preset slots (0-8)
+ * @brief Save current segment states to a preset slot
+ * @param slot Slot index (0-7)
+ * @param name Preset name (max 16 chars, UTF-8), or NULL for "Preset N"
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if slot out of range, error code otherwise
+ */
+esp_err_t preset_manager_save(uint8_t slot, const char *name);
+
+/**
+ * @brief Recall a preset from a slot
+ * @param slot Slot index (0-7)
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if slot out of range,
+ *         ESP_ERR_NOT_FOUND if slot empty, error code otherwise
+ */
+esp_err_t preset_manager_recall(uint8_t slot);
+
+/**
+ * @brief Delete a preset from a slot
+ * @param slot Slot index (0-7)
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if slot out of range, error code otherwise
+ */
+esp_err_t preset_manager_delete(uint8_t slot);
+
+/**
+ * @brief Get the name of a preset slot
+ * @param slot Slot index (0-7)
+ * @param name_out Buffer to write name into (must be at least PRESET_NAME_MAX+1 bytes)
+ * @param max_len Buffer size
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if slot out of range or slot empty
+ */
+esp_err_t preset_manager_get_slot_name(uint8_t slot, char *name_out, size_t max_len);
+
+/**
+ * @brief Check if a preset slot is occupied
+ * @param slot Slot index (0-7)
+ * @param is_occupied Output: true if slot has data, false if empty
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if slot out of range or is_occupied is NULL
+ */
+esp_err_t preset_manager_is_slot_occupied(uint8_t slot, bool *is_occupied);
+
+/**
+ * @brief List all preset slots with names and status
+ */
+void preset_manager_list_presets(void);
+
+/* ================================================================== */
+/*  Compatibility functions for Zigbee handlers (deprecated)          */
+/*  Kept for backwards compatibility with old Z2M converters          */
+/* ================================================================== */
+
+/**
+ * @brief Get count of occupied slots (compatibility)
+ * @return Number of occupied slots (0-8)
  */
 int preset_manager_count(void);
 
 /**
- * @brief Save current segment states as a named preset
- * @param name Preset name (max 16 chars, null-terminated)
- * @return true if saved successfully, false on error
- */
-bool preset_manager_save(const char *name);
-
-/**
- * @brief Recall a preset by name
- * @param name Preset name to recall
- * @return true if recalled successfully, false if not found
- */
-bool preset_manager_recall(const char *name);
-
-/**
- * @brief Delete a preset by name
- * @param name Preset name to delete
- * @return true if deleted successfully, false if not found
- */
-bool preset_manager_delete(const char *name);
-
-/**
- * @brief Get the name of the last recalled preset
- * @return Pointer to active preset name (empty string if none)
+ * @brief Get active preset name (compatibility stub)
+ * @return Empty string (active tracking removed in v2)
  */
 const char *preset_manager_get_active(void);
 
 /**
- * @brief Get preset name from a specific slot
- * @param slot Slot index (0-7)
- * @param buf Buffer to write name into
- * @param len Buffer size
- * @return true if slot has a preset, false if empty
+ * @brief Recall preset by name (compatibility bridge)
+ * @param name Preset name
+ * @return true on success, false on error
  */
-bool preset_manager_get_name(int slot, char *buf, size_t len);
+bool preset_manager_recall_by_name(const char *name);
+
+/**
+ * @brief Save preset by name (compatibility bridge)
+ * @param name Preset name
+ * @return true on success, false on error
+ */
+bool preset_manager_save_by_name(const char *name);
+
+/**
+ * @brief Delete preset by name (compatibility bridge)
+ * @param name Preset name
+ * @return true on success, false on error
+ */
+bool preset_manager_delete_by_name(const char *name);
 
 #ifdef __cplusplus
 }

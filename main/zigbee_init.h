@@ -44,19 +44,27 @@ extern "C" {
 /**
  * @brief Custom cluster 0xFC02: Preset configuration
  *   0x0000: preset_count    (U8) — number of stored presets (0-8)
- *   0x0001: active_preset   (CharString) — name of last recalled preset
- *   0x0002: recall_preset   (CharString) — write name to recall preset
- *   0x0003: save_preset     (CharString) — write name to save preset
- *   0x0004: delete_preset   (CharString) — write name to delete preset
+ *   0x0001: active_preset   (CharString) — DEPRECATED: name of last recalled preset
+ *   0x0002: recall_preset   (CharString) — DEPRECATED: write name to recall preset
+ *   0x0003: save_preset     (CharString) — DEPRECATED: write name to save preset
+ *   0x0004: delete_preset   (CharString) — DEPRECATED: write name to delete preset
  *   0x0010-0x0017: preset_N_name (CharString) — names of stored presets (slots 0-7)
+ *   0x0020: recall_slot     (U8, RW) — write slot 0-7 to recall preset
+ *   0x0021: save_slot       (U8, RW) — write slot 0-7 to save current state
+ *   0x0022: delete_slot     (U8, RW) — write slot 0-7 to delete preset
+ *   0x0023: save_name       (CharString, RW) — name for next save operation
  */
 #define ZB_CLUSTER_PRESET_CONFIG        0xFC02
 #define ZB_ATTR_PRESET_COUNT            0x0000
-#define ZB_ATTR_ACTIVE_PRESET           0x0001
-#define ZB_ATTR_RECALL_PRESET           0x0002
-#define ZB_ATTR_SAVE_PRESET             0x0003
-#define ZB_ATTR_DELETE_PRESET           0x0004
+#define ZB_ATTR_ACTIVE_PRESET           0x0001  /* DEPRECATED */
+#define ZB_ATTR_RECALL_PRESET           0x0002  /* DEPRECATED */
+#define ZB_ATTR_SAVE_PRESET             0x0003  /* DEPRECATED */
+#define ZB_ATTR_DELETE_PRESET           0x0004  /* DEPRECATED */
 #define ZB_ATTR_PRESET_NAME_BASE        0x0010
+#define ZB_ATTR_RECALL_SLOT             0x0020
+#define ZB_ATTR_SAVE_SLOT               0x0021
+#define ZB_ATTR_DELETE_SLOT             0x0022
+#define ZB_ATTR_SAVE_NAME               0x0023
 
 /**
  * @brief Initialize Zigbee stack and create device

@@ -73,10 +73,14 @@ const segmentConfigCluster = {
 // Preset config cluster attributes
 const presetAttrs = {
     presetCount:    {ID: 0x0000, type: ZCL_UINT8},
-    activePreset:   {ID: 0x0001, type: ZCL_CHAR_STRING},
-    recallPreset:   {ID: 0x0002, type: ZCL_CHAR_STRING, write: true},
-    savePreset:     {ID: 0x0003, type: ZCL_CHAR_STRING, write: true},
-    deletePreset:   {ID: 0x0004, type: ZCL_CHAR_STRING, write: true},
+    activePreset:   {ID: 0x0001, type: ZCL_CHAR_STRING},  // DEPRECATED
+    recallPreset:   {ID: 0x0002, type: ZCL_CHAR_STRING, write: true},  // DEPRECATED
+    savePreset:     {ID: 0x0003, type: ZCL_CHAR_STRING, write: true},  // DEPRECATED
+    deletePreset:   {ID: 0x0004, type: ZCL_CHAR_STRING, write: true},  // DEPRECATED
+    recallSlot:     {ID: 0x0020, type: ZCL_UINT8, write: true},
+    saveSlot:       {ID: 0x0021, type: ZCL_UINT8, write: true},
+    deleteSlot:     {ID: 0x0022, type: ZCL_UINT8, write: true},
+    saveName:       {ID: 0x0023, type: ZCL_CHAR_STRING, write: true},
 };
 for (let n = 0; n < MAX_PRESETS; n++) {
     presetAttrs[`preset${n}Name`] = {ID: 0x0010 + n, type: ZCL_CHAR_STRING};
@@ -137,10 +141,16 @@ const fzLocal = {
             if (msg.data.presetCount !== undefined) result.preset_count = msg.data.presetCount;
             if (msg.data.activePreset !== undefined) result.active_preset = msg.data.activePreset;
 
-            // Publish individual preset names for HA visibility
+            // Publish individual preset names for HA visibility (0-indexed)
             for (let n = 0; n < MAX_PRESETS; n++) {
                 if (msg.data[`preset${n}Name`] !== undefined) {
-                    result[`preset_${n + 1}_name`] = msg.data[`preset${n}Name`];
+                    const name = msg.data[`preset${n}Name`];
+                    // Show "(empty)" for empty or default names
+                    if (!name || name === '' || name === `Preset ${n + 1}`) {
+                        result[`preset_${n}_name`] = '(empty)';
+                    } else {
+                        result[`preset_${n}_name`] = name;
+                    }
                 }
             }
 
@@ -195,37 +205,27 @@ const tzLocal = {
         },
     },
     presets: {
-        key: ['save_preset', 'preset_selector', 'recall_action', 'delete_action'],
+        key: ['preset_slot', 'new_preset_name', 'apply_preset', 'save_preset', 'delete_preset'],
         convertSet: async (entity, key, value, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
 
-            if (key === 'save_preset') {
-                // User typed a preset name, save current state
-                if (value && value.length > 0) {
-                    await ep.write('presetConfig', {savePreset: value});
-                    // Re-read preset list to update dropdown
-                    setTimeout(async () => {
-                        const presetNameAttrs = [];
-                        for (let n = 0; n < MAX_PRESETS; n++) {
-                            presetNameAttrs.push(`preset${n}Name`);
-                        }
-                        await ep.read('presetConfig', ['presetCount', ...presetNameAttrs]);
-                    }, 500);
-                }
-                return {state: {save_preset: ''}};  // Clear input after save
+            if (key === 'preset_slot') {
+                // Store selected slot in meta.state (no device write)
+                return {state: {preset_slot: value}};
             }
 
-            if (key === 'preset_selector') {
-                // User selected a preset from dropdown, store selection
-                return {state: {preset_selector: value}};
+            if (key === 'new_preset_name') {
+                // Store new preset name in meta.state (no device write)
+                return {state: {new_preset_name: value}};
             }
 
-            if (key === 'recall_action') {
-                // User clicked recall - use preset_selector value
-                const selectedPreset = meta.state.preset_selector;
-                if (selectedPreset && selectedPreset.length > 0) {
-                    await ep.write('presetConfig', {recallPreset: selectedPreset});
+            if (key === 'apply_preset') {
+                // Read preset_slot from meta.state and recall
+                const slot = meta.state.preset_slot;
+                if (slot !== undefined && slot !== '') {
+                    const slotNum = parseInt(slot);
+                    await ep.write('presetConfig', {recallSlot: slotNum});
 
                     // Wait for device's deferred ZCL sync (100ms) + safety margin
                     await new Promise(resolve => setTimeout(resolve, 200));
@@ -248,38 +248,50 @@ const tzLocal = {
                         }
                     }
                 }
-                return {state: {recall_action: ''}};  // Clear action field
+                return {state: {apply_preset: ''}};  // Clear action field
             }
 
-            if (key === 'delete_action') {
-                // User clicked delete - use preset_selector value
-                const selectedPreset = meta.state.preset_selector;
-                if (selectedPreset && selectedPreset.length > 0) {
-                    await ep.write('presetConfig', {deletePreset: selectedPreset});
-                    // Re-read preset list to update dropdown
-                    setTimeout(async () => {
-                        const presetNameAttrs = [];
-                        for (let n = 0; n < MAX_PRESETS; n++) {
-                            presetNameAttrs.push(`preset${n}Name`);
-                        }
-                        await ep.read('presetConfig', ['presetCount', ...presetNameAttrs]);
-                    }, 500);
+            if (key === 'save_preset') {
+                // Read new_preset_name and preset_slot from meta.state
+                const name = meta.state.new_preset_name;
+                const slot = meta.state.preset_slot;
+
+                if (slot !== undefined && slot !== '') {
+                    const slotNum = parseInt(slot);
+
+                    // Write name if provided (optional)
+                    if (name && name.length > 0) {
+                        await ep.write('presetConfig', {saveName: name});
+                    }
+
+                    // Write slot to save
+                    await ep.write('presetConfig', {saveSlot: slotNum});
+
+                    // Wait for device to save, then re-read that slot's name
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await ep.read('presetConfig', [`preset${slotNum}Name`]);
                 }
-                return {state: {delete_action: '', preset_selector: ''}};  // Clear both fields
+                return {state: {save_preset: ''}};  // Clear action field only
+            }
+
+            if (key === 'delete_preset') {
+                // Read preset_slot from meta.state and delete
+                const slot = meta.state.preset_slot;
+                if (slot !== undefined && slot !== '') {
+                    const slotNum = parseInt(slot);
+                    await ep.write('presetConfig', {deleteSlot: slotNum});
+
+                    // Wait for device to delete, then re-read that slot's name
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await ep.read('presetConfig', [`preset${slotNum}Name`]);
+                }
+                return {state: {delete_preset: ''}};  // Clear action field only
             }
         },
         convertGet: async (entity, key, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
-            if (key === 'preset_count' || key === 'active_preset') {
-                await ep.read('presetConfig', ['presetCount', 'activePreset']);
-            } else {
-                const m = key.match(/^preset_(\d+)_name$/);
-                if (m) {
-                    const n = parseInt(m[1]) - 1;
-                    await ep.read('presetConfig', [`preset${n}Name`]);
-                }
-            }
+            // No GET operations needed for slot-based system
         },
     },
 };
@@ -288,11 +300,7 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
     tzLocal.segments.key.push(`seg${n}_start`, `seg${n}_count`, `seg${n}_strip`);
 }
 
-// Add preset get keys
-for (let n = 1; n <= MAX_PRESETS; n++) {
-    tzLocal.presets.key.push(`preset_${n}_name`);
-}
-tzLocal.presets.key.push('preset_count', 'active_preset');
+// No additional keys needed - all handled in main key array
 
 // ---- Preset exposes ----
 function textExpose(name, label, access, description) {
@@ -304,27 +312,33 @@ function enumExpose(name, label, access, description, values) {
 }
 
 const presetExposes = [
-    numericExpose('preset_count', 'Preset count', ACCESS_READ,
-        'Number of stored presets (0-8)', {value_min: 0, value_max: 8}),
-    textExpose('active_preset', 'Active preset', ACCESS_READ,
-        'Name of last recalled preset'),
-    textExpose('save_preset', 'Save new preset', ACCESS_WRITE,
-        'Type preset name and submit to save current segment states'),
-    textExpose('preset_selector', 'Preset name', ACCESS_ALL,
-        'Type or paste preset name here for recall/delete actions'),
-    textExpose('recall_action', 'Recall preset', ACCESS_WRITE,
-        'Write any value (e.g. "go") to activate preset from Preset name field'),
-    textExpose('delete_action', 'Delete preset', ACCESS_WRITE,
-        'Write any value (e.g. "delete") to remove preset from Preset name field'),
-];
+    // Preset slot selector
+    enumExpose('preset_slot', 'Preset Slot', ACCESS_ALL,
+        'Select preset slot (0-7)',
+        ['0', '1', '2', '3', '4', '5', '6', '7']),
 
-// Add individual preset name fields for visibility in HA
-for (let n = 1; n <= MAX_PRESETS; n++) {
-    presetExposes.push(
-        textExpose(`preset_${n}_name`, `Preset ${n} name`, ACCESS_READ,
-            `Name stored in preset slot ${n} (empty if unused)`)
-    );
-}
+    // Action buttons
+    enumExpose('apply_preset', 'Apply Preset', ACCESS_WRITE,
+        'Activate selected preset', ['Apply']),
+    enumExpose('delete_preset', 'Delete Preset', ACCESS_WRITE,
+        'Delete selected preset', ['Delete']),
+
+    // Save workflow
+    textExpose('new_preset_name', 'New Preset Name', ACCESS_ALL,
+        'Name for new preset (max 16 chars)'),
+    enumExpose('save_preset', 'Save Preset', ACCESS_WRITE,
+        'Save current state to selected slot', ['Save']),
+
+    // 8 read-only slot name sensors
+    textExpose('preset_0_name', 'Slot 0 Name', ACCESS_READ, 'Name of preset in slot 0'),
+    textExpose('preset_1_name', 'Slot 1 Name', ACCESS_READ, 'Name of preset in slot 1'),
+    textExpose('preset_2_name', 'Slot 2 Name', ACCESS_READ, 'Name of preset in slot 2'),
+    textExpose('preset_3_name', 'Slot 3 Name', ACCESS_READ, 'Name of preset in slot 3'),
+    textExpose('preset_4_name', 'Slot 4 Name', ACCESS_READ, 'Name of preset in slot 4'),
+    textExpose('preset_5_name', 'Slot 5 Name', ACCESS_READ, 'Name of preset in slot 5'),
+    textExpose('preset_6_name', 'Slot 6 Name', ACCESS_READ, 'Name of preset in slot 6'),
+    textExpose('preset_7_name', 'Slot 7 Name', ACCESS_READ, 'Name of preset in slot 7'),
+];
 
 // ---- Segment geometry exposes ----
 const segExposes = [];
@@ -393,7 +407,7 @@ const definition = {
         }
     },
 
-    configure: async (device, coordinatorEndpoint) => {
+    configure: async (device, coordinatorEndpoint, logger) => {
         registerCustomClusters(device);
         const ep1 = device.getEndpoint(1);
         await ep1.read('ledCtrlConfig', ['strip1Count', 'strip2Count']);

@@ -22,13 +22,17 @@ extern uint16_t g_strip_count[2];
 
 static const char *TAG = "zb_init";
 
-/* Static buffers for preset cluster CharString attributes (1 len byte + 16 chars) */
+/* Static buffers for preset cluster attributes */
 static uint8_t s_preset_count_attr = 0;
-static uint8_t s_active_preset_attr[17] = {0};
-static uint8_t s_recall_preset_attr[17] = {0};
-static uint8_t s_save_preset_attr[17] = {0};
-static uint8_t s_delete_preset_attr[17] = {0};
-static uint8_t s_preset_name_attrs[MAX_PRESETS][17] = {{0}};
+static uint8_t s_active_preset_attr[17] = {0};       /* DEPRECATED */
+static uint8_t s_recall_preset_attr[17] = {0};       /* DEPRECATED */
+static uint8_t s_save_preset_attr[17] = {0};         /* DEPRECATED */
+static uint8_t s_delete_preset_attr[17] = {0};       /* DEPRECATED */
+static uint8_t s_preset_name_attrs[MAX_PRESET_SLOTS][17] = {{0}};
+static uint8_t s_recall_slot_attr = 0xFF;            /* 0xFF = no pending action */
+static uint8_t s_save_slot_attr = 0xFF;              /* 0xFF = no pending action */
+static uint8_t s_delete_slot_attr = 0xFF;            /* 0xFF = no pending action */
+static uint8_t s_save_name_attr[17] = {0};           /* CharString for next save */
 
 /**
  * @brief Create color control attribute list with HS, XY, and CT capabilities
@@ -141,16 +145,22 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 
         /* Initialize preset count and names from preset manager */
         s_preset_count_attr = (uint8_t)preset_manager_count();
-        for (int n = 0; n < MAX_PRESETS; n++) {
+        for (int n = 0; n < MAX_PRESET_SLOTS; n++) {
             char name[PRESET_NAME_MAX + 1];
-            if (preset_manager_get_name(n, name, sizeof(name))) {
+            if (preset_manager_get_slot_name((uint8_t)n, name, sizeof(name)) == ESP_OK) {
                 size_t len = strlen(name);
                 s_preset_name_attrs[n][0] = (uint8_t)len;
                 memcpy(&s_preset_name_attrs[n][1], name, len);
+            } else {
+                /* Empty slot: set default name */
+                char default_name[PRESET_NAME_MAX + 1];
+                int dlen = snprintf(default_name, sizeof(default_name), "Preset %d", n + 1);
+                s_preset_name_attrs[n][0] = (uint8_t)dlen;
+                memcpy(&s_preset_name_attrs[n][1], default_name, dlen);
             }
         }
 
-        /* Initialize active preset */
+        /* Initialize active preset (deprecated) */
         const char *active = preset_manager_get_active();
         if (active && active[0] != '\0') {
             size_t len = strlen(active);
@@ -158,7 +168,7 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             memcpy(&s_active_preset_attr[1], active, len);
         }
 
-        /* Add attributes */
+        /* Add attributes: deprecated name-based attrs for backwards compatibility */
         esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_PRESET_COUNT,
             ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY, &s_preset_count_attr);
         esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_ACTIVE_PRESET,
@@ -170,11 +180,21 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_DELETE_PRESET,
             ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY, s_delete_preset_attr);
 
-        /* Add preset name attributes (read-only) */
-        for (int n = 0; n < MAX_PRESETS; n++) {
+        /* Add preset name attributes (read-only, slots 0-7) */
+        for (int n = 0; n < MAX_PRESET_SLOTS; n++) {
             esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_PRESET_NAME_BASE + n,
                 ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY, s_preset_name_attrs[n]);
         }
+
+        /* Add new slot-based attributes (Phase 3) */
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_RECALL_SLOT,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_recall_slot_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_SAVE_SLOT,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_save_slot_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_DELETE_SLOT,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_delete_slot_attr);
+        esp_zb_custom_cluster_add_custom_attr(preset_cfg, ZB_ATTR_SAVE_NAME,
+            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, s_save_name_attr);
 
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, preset_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     }

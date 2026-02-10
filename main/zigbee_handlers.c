@@ -32,6 +32,9 @@ extern uint16_t g_strip_count[2];
 
 static bool s_network_joined = false;
 
+/* Transient storage for save_name (for next save_slot operation) */
+static char s_pending_save_name[PRESET_NAME_MAX + 1] = {0};
+
 /* Debounce timer: batch rapid XY/HS attribute updates */
 static esp_timer_handle_t s_color_update_timer = NULL;
 
@@ -321,7 +324,7 @@ static void update_preset_zcl_attrs(void)
     esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_PRESET_COUNT, &count, false);
 
-    /* Update active preset */
+    /* Update active preset (deprecated) */
     const char *active = preset_manager_get_active();
     uint8_t active_buf[17] = {0};
     if (active && active[0] != '\0') {
@@ -333,18 +336,141 @@ static void update_preset_zcl_attrs(void)
     esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
         ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_ACTIVE_PRESET, active_buf, false);
 
-    /* Update preset name attributes */
-    for (int n = 0; n < MAX_PRESETS; n++) {
+    /* Update preset name attributes (slots 0-7) */
+    for (int n = 0; n < MAX_PRESET_SLOTS; n++) {
         char name[PRESET_NAME_MAX + 1];
         uint8_t name_buf[17] = {0};
-        if (preset_manager_get_name(n, name, sizeof(name))) {
+        if (preset_manager_get_slot_name((uint8_t)n, name, sizeof(name)) == ESP_OK) {
             size_t len = strlen(name);
             name_buf[0] = (uint8_t)len;
             memcpy(&name_buf[1], name, len);
+        } else {
+            /* Empty slot: set default name */
+            char default_name[PRESET_NAME_MAX + 1];
+            int dlen = snprintf(default_name, sizeof(default_name), "Preset %d", n + 1);
+            name_buf[0] = (uint8_t)dlen;
+            memcpy(&name_buf[1], default_name, dlen);
         }
         esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_PRESET_NAME_BASE + n, name_buf, false);
     }
+}
+
+/**
+ * @brief Handle recall_slot write (0x0020)
+ */
+static esp_err_t handle_recall_slot_write(uint8_t slot)
+{
+    /* Validate slot range */
+    if (slot > 7) {
+        ESP_LOGE(TAG, "Invalid recall_slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Recall preset */
+    esp_err_t err = preset_manager_recall(slot);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Recalled preset from slot %d", slot);
+        update_leds();
+        schedule_save();
+        update_preset_zcl_attrs();
+        /* Defer ZCL sync to avoid stack assertion */
+        esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);
+    } else if (err == ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "Slot %d is empty, cannot recall", slot);
+    } else {
+        ESP_LOGE(TAG, "Failed to recall slot %d: %s", slot, esp_err_to_name(err));
+    }
+
+    /* Clear recall_slot attribute (0xFF = no pending action) */
+    uint8_t clear = 0xFF;
+    esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_RECALL_SLOT, &clear, false);
+
+    return err;
+}
+
+/**
+ * @brief Handle save_slot write (0x0021)
+ */
+static esp_err_t handle_save_slot_write(uint8_t slot)
+{
+    /* Validate slot range */
+    if (slot > 7) {
+        ESP_LOGE(TAG, "Invalid save_slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Use pending save name if set, otherwise NULL for default name */
+    const char *name = (s_pending_save_name[0] != '\0') ? s_pending_save_name : NULL;
+
+    /* Save preset */
+    esp_err_t err = preset_manager_save(slot, name);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Saved preset to slot %d with name '%s'", slot, name ? name : "(default)");
+        update_preset_zcl_attrs();
+        /* Clear pending save name */
+        memset(s_pending_save_name, 0, sizeof(s_pending_save_name));
+        uint8_t empty_str[17] = {0};
+        esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_SAVE_NAME, empty_str, false);
+    } else {
+        ESP_LOGE(TAG, "Failed to save slot %d: %s", slot, esp_err_to_name(err));
+    }
+
+    /* Clear save_slot attribute (0xFF = no pending action) */
+    uint8_t clear = 0xFF;
+    esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_SAVE_SLOT, &clear, false);
+
+    return err;
+}
+
+/**
+ * @brief Handle delete_slot write (0x0022)
+ */
+static esp_err_t handle_delete_slot_write(uint8_t slot)
+{
+    /* Validate slot range */
+    if (slot > 7) {
+        ESP_LOGE(TAG, "Invalid delete_slot %d (must be 0-7)", slot);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Delete preset */
+    esp_err_t err = preset_manager_delete(slot);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Deleted preset from slot %d", slot);
+        update_preset_zcl_attrs();
+    } else {
+        ESP_LOGE(TAG, "Failed to delete slot %d: %s", slot, esp_err_to_name(err));
+    }
+
+    /* Clear delete_slot attribute (0xFF = no pending action) */
+    uint8_t clear = 0xFF;
+    esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE, ZB_CLUSTER_PRESET_CONFIG,
+        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ZB_ATTR_DELETE_SLOT, &clear, false);
+
+    return err;
+}
+
+/**
+ * @brief Handle save_name write (0x0023)
+ */
+static esp_err_t handle_save_name_write(const uint8_t *char_str)
+{
+    /* Parse CharString: first byte is length, rest is name */
+    uint8_t name_len = char_str[0];
+    if (name_len > PRESET_NAME_MAX) {
+        name_len = PRESET_NAME_MAX;
+    }
+
+    /* Store in pending buffer */
+    memcpy(s_pending_save_name, &char_str[1], name_len);
+    s_pending_save_name[name_len] = '\0';
+
+    ESP_LOGI(TAG, "Stored save_name: '%s' (for next save_slot operation)", s_pending_save_name);
+    return ESP_OK;
 }
 
 /* ================================================================== */
@@ -400,7 +526,26 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
     /* Custom cluster: preset configuration (EP1 only) */
     if (cluster == ZB_CLUSTER_PRESET_CONFIG) {
-        /* Parse CharString: first byte is length, rest is name */
+        /* Handle slot-based attributes (Phase 3) */
+        if (attr_id == ZB_ATTR_RECALL_SLOT) {
+            uint8_t slot = *(uint8_t *)value;
+            handle_recall_slot_write(slot);
+            return ESP_OK;
+        } else if (attr_id == ZB_ATTR_SAVE_SLOT) {
+            uint8_t slot = *(uint8_t *)value;
+            handle_save_slot_write(slot);
+            return ESP_OK;
+        } else if (attr_id == ZB_ATTR_DELETE_SLOT) {
+            uint8_t slot = *(uint8_t *)value;
+            handle_delete_slot_write(slot);
+            return ESP_OK;
+        } else if (attr_id == ZB_ATTR_SAVE_NAME) {
+            uint8_t *char_str = (uint8_t *)value;
+            handle_save_name_write(char_str);
+            return ESP_OK;
+        }
+
+        /* Handle deprecated name-based attributes (backwards compatibility) */
         uint8_t *char_str = (uint8_t *)value;
         uint8_t name_len = char_str[0];
         if (name_len > PRESET_NAME_MAX) name_len = PRESET_NAME_MAX;
@@ -409,8 +554,8 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
         name[name_len] = '\0';
 
         if (attr_id == ZB_ATTR_RECALL_PRESET) {
-            if (preset_manager_recall(name)) {
-                ESP_LOGI(TAG, "Recalled preset '%s'", name);
+            if (preset_manager_recall_by_name(name)) {
+                ESP_LOGI(TAG, "Recalled preset '%s' (deprecated API)", name);
                 update_leds();
                 schedule_save();
                 update_preset_zcl_attrs();
@@ -420,15 +565,15 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 ESP_LOGW(TAG, "Preset '%s' not found", name);
             }
         } else if (attr_id == ZB_ATTR_SAVE_PRESET) {
-            if (preset_manager_save(name)) {
-                ESP_LOGI(TAG, "Saved preset '%s'", name);
+            if (preset_manager_save_by_name(name)) {
+                ESP_LOGI(TAG, "Saved preset '%s' (deprecated API)", name);
                 update_preset_zcl_attrs();
             } else {
                 ESP_LOGW(TAG, "Failed to save preset '%s'", name);
             }
         } else if (attr_id == ZB_ATTR_DELETE_PRESET) {
-            if (preset_manager_delete(name)) {
-                ESP_LOGI(TAG, "Deleted preset '%s'", name);
+            if (preset_manager_delete_by_name(name)) {
+                ESP_LOGI(TAG, "Deleted preset '%s' (deprecated API)", name);
                 update_preset_zcl_attrs();
             } else {
                 ESP_LOGW(TAG, "Preset '%s' not found", name);
