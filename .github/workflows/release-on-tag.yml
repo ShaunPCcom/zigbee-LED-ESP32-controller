@@ -84,6 +84,7 @@ jobs:
       - name: Build firmware
         run: |
           . esp-idf/export.sh
+          idf.py set-target esp32h2
           idf.py build
 
           echo "✅ Firmware built successfully"
