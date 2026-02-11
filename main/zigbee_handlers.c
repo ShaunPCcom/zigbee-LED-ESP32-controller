@@ -24,6 +24,7 @@
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "zigbee_ota.h"
 #include <math.h>
 
 static const char *TAG = "zb_handler";
@@ -660,6 +661,12 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
 esp_err_t zigbee_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message)
 {
+    /* Route OTA callbacks to OTA component */
+    esp_err_t ota_ret = zigbee_ota_action_handler(callback_id, message);
+    if (ota_ret != ESP_ERR_NOT_SUPPORTED) {
+        return ota_ret;  /* OTA component handled it */
+    }
+
     esp_err_t ret = ESP_OK;
     switch (callback_id) {
     case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID:

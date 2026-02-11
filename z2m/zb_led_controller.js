@@ -377,6 +377,7 @@ const definition = {
 
     fromZigbee: [fzLocal.config, fzLocal.segments, fzLocal.presets],
     toZigbee: [tzLocal.strip_counts, tzLocal.segments, tzLocal.presets],
+    ota: true,  // Enable OTA update support
 
     exposes: [
         numericExpose('strip1_count', 'Strip 1 count', ACCESS_ALL,

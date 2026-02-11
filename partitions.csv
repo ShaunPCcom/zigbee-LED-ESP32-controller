@@ -1,8 +1,9 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# Note: Simplified partition table for 2MB flash (Phase 1-4)
-# OTA partitions will be added in Phase 5 (requires 4MB flash)
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 1536K,
-zb_storage, data, fat,   ,        64K,
-zb_fct,   data, fat,     ,        4K,
+# Dual OTA partition table for 4MB flash (Phase 5)
+nvs,        data, nvs,     0x9000,  24K,
+otadata,    data, ota,     ,        8K,
+phy_init,   data, phy,     ,        4K,
+ota_0,      app,  ota_0,   ,        1700K,
+ota_1,      app,  ota_1,   ,        1700K,
+zb_storage, data, fat,     ,        16K,
+zb_fct,     data, fat,     ,        1K,

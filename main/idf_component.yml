@@ -4,3 +4,5 @@ dependencies:
     version: '>=5.5.0'
   espressif/esp-zigbee-lib: ^1.6.4
   espressif/esp-zboss-lib: '*'
+  zigbee_ota:
+    git: https://github.com/ShaunPCcom/esp32-zigbee-ota.git

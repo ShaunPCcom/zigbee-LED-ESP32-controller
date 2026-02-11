@@ -1,0 +1,186 @@
+name: Release Firmware on Tag
+
+on:
+  push:
+    tags:
+      - 'v*.*.*.*'
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+
+          # Strip any suffix (e.g., -test, -alpha, -rc1)
+          VERSION_CLEAN="${VERSION%%-*}"
+
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # Convert version to hex for fileVersion (use clean version for numbers)
+          IFS='.' read -r major minor patch build <<< "$VERSION_CLEAN"
+          if [ -z "$build" ]; then build=0; fi
+
+          # Calculate hex fileVersion: (major << 16) | (minor << 8) | build
+          # Format: 0x00MMmmBB where MM=major, mm=minor, BB=build (patch unused)
+          file_version_dec=$((major * 65536 + minor * 256 + build))
+          file_version=$(printf "0x%08x" $file_version_dec)
+
+          echo "file_version_hex=${file_version}" >> $GITHUB_OUTPUT
+          echo "file_version_dec=${file_version_dec}" >> $GITHUB_OUTPUT
+
+          echo "📦 Release version: ${VERSION}"
+          echo "📦 Version (clean): ${VERSION_CLEAN}"
+          echo "🔢 File version (hex): ${file_version}"
+          echo "🔢 File version (dec): ${file_version_dec}"
+
+      - name: Validate version in code
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
+
+          # Check zigbee_init.c for OTA version
+          if ! grep -q "current_file_version = ${FILE_VERSION_HEX}" main/zigbee_init.c; then
+            echo "❌ ERROR: Version mismatch in main/zigbee_init.c"
+            echo "Expected: current_file_version = ${FILE_VERSION_HEX}"
+            echo "Please update main/zigbee_init.c to match tag ${GITHUB_REF#refs/tags/}"
+            exit 1
+          fi
+
+          echo "✅ Version validated in code"
+
+      - name: Install ESP-IDF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf python3 python3-pip \
+            python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util \
+            libusb-1.0-0
+
+      - name: Clone ESP-IDF
+        run: |
+          git clone --recursive --branch v5.5.2 --depth 1 https://github.com/espressif/esp-idf.git
+          cd esp-idf
+          ./install.sh esp32h2
+
+      - name: Clone ESP Zigbee SDK
+        run: |
+          cd esp-idf/..
+          git clone --recursive --branch main --depth 1 https://github.com/espressif/esp-zigbee-sdk.git
+          ls -la esp-zigbee-sdk/tools/image_builder_tool/
+
+      - name: Build firmware
+        run: |
+          . esp-idf/export.sh
+          idf.py build
+
+          echo "✅ Firmware built successfully"
+          ls -lh build/zb_led_controller.bin
+
+      - name: Install zigpy for OTA image creation
+        run: |
+          python3 -m pip install zigpy
+
+      - name: Create OTA image
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
+
+          python3 esp-zigbee-sdk/tools/image_builder_tool/image_builder_tool.py \
+            -c zb_led_controller_v${VERSION}.ota \
+            -v ${FILE_VERSION_HEX} \
+            -m 0x131B \
+            -i 0x0002 \
+            -f build/zb_led_controller.bin
+
+          echo "✅ OTA image created"
+          ls -lh zb_led_controller_v${VERSION}.ota
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Get previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "First release - no previous tag found"
+            NOTES="Initial release"
+          else
+            echo "Generating changelog from ${PREVIOUS_TAG} to ${GITHUB_REF#refs/tags/}"
+            NOTES=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          fi
+
+          # Save to file for multiline output
+          echo "${NOTES}" > release_notes.txt
+          echo "notes_file=release_notes.txt" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          gh release create "${TAG}" \
+            zb_led_controller_v${VERSION}.ota \
+            --title "ZB-H2-LED ${TAG}" \
+            --notes-file ${{ steps.release_notes.outputs.notes_file }}
+
+          echo "✅ GitHub release created: ${TAG}"
+
+      - name: Update OTA index
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          FILE_VERSION_DEC="${{ steps.version.outputs.file_version_dec }}"
+
+          # Create/update OTA index
+          cat > z2m/ota_index.json <<EOF
+          [
+            {
+              "manufacturerCode": 4891,
+              "imageType": 2,
+              "fileVersion": ${FILE_VERSION_DEC},
+              "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/zb_led_controller_v${VERSION}.ota"
+            }
+          ]
+          EOF
+
+          echo "✅ OTA index updated"
+          cat z2m/ota_index.json
+
+      - name: Commit and push OTA index
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add z2m/ota_index.json
+          git diff --staged --quiet || git commit -m "chore: update OTA index for ${TAG}"
+          git push origin HEAD:master
+
+          echo "✅ OTA index committed and pushed"
+
+      - name: Release Summary
+        run: |
+          echo "🎉 Release Complete!"
+          echo ""
+          echo "📦 Version: ${{ steps.version.outputs.version }}"
+          echo "🏷️  Tag: ${{ steps.version.outputs.tag }}"
+          echo "📄 OTA File: zb_led_controller_v${{ steps.version.outputs.version }}.ota"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
+          echo ""
+          echo "Users will be notified of the update within 24 hours (or on manual check)."

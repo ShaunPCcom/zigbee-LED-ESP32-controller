@@ -16,6 +16,7 @@
 #include "preset_manager.h"
 #include "esp_log.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "zigbee_ota.h"
 #include <string.h>
 
 extern uint16_t g_strip_count[2];
@@ -197,6 +198,16 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, s_save_name_attr);
 
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, preset_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+        /* Add OTA cluster to primary endpoint (EP1) */
+        zigbee_ota_config_t ota_cfg = ZIGBEE_OTA_CONFIG_DEFAULT();
+        ota_cfg.manufacturer_code = 0x131B;  /* Espressif */
+        ota_cfg.image_type = 0x0002;         /* LED Controller (different from LD2450) */
+        ota_cfg.current_file_version = 0x00010000;  /* v1.0.0.0 */
+        ota_cfg.hw_version = 1;
+        ota_cfg.query_interval_minutes = 1440;  /* Check every 24 hours */
+        ESP_ERROR_CHECK(zigbee_ota_init(cl, ZB_SEGMENT_EP_BASE, &ota_cfg));
+        ESP_LOGI(TAG, "OTA cluster initialized on EP%d (v1.0.0.0)", ZB_SEGMENT_EP_BASE);
     }
 
     return cl;
