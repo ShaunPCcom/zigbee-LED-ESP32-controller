@@ -175,6 +175,18 @@ jobs:
 
           echo "✅ OTA index committed and pushed"
 
+      - name: Trigger OTA index aggregator
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/ShaunPCcom/zigbee-ota-index/dispatches \
+            -d '{"event_type":"update-index","client_payload":{"repository":"zigbee-LED-ESP32-controller","version":"'"${VERSION}"'"}}'
+
+          echo "✅ Triggered OTA index aggregator update"
+
       - name: Release Summary
         run: |
           echo "🎉 Release Complete!"
