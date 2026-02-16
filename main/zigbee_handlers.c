@@ -181,23 +181,58 @@ static void color_attr_poll_cb(uint8_t param)
     for (int n = 0; n < MAX_SEGMENTS; n++) {
         uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
 
-        uint16_t enh_hue = 0;
-        if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                          ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &enh_hue)) {
-            uint16_t hd = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
-            if (hd != state[n].hue) { state[n].hue = hd; state[n].color_mode = 0; changed = true; }
+        /* Read current color mode from ZCL first */
+        uint8_t zcl_mode = state[n].color_mode;  /* default to in-memory */
+        read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                     ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &zcl_mode);
+
+        /* Poll brightness level for smooth transitions (applies to all modes) */
+        uint8_t zcl_level = 0;
+        if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                        ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &zcl_level)) {
+            if (zcl_level != state[n].level) {
+                state[n].level = zcl_level;
+                changed = true;
+            }
         }
 
-        uint8_t sat = 0;
-        if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                         ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat)) {
-            if (sat != state[n].saturation) { state[n].saturation = sat; state[n].color_mode = 0; changed = true; }
+        /* Only poll and update HS values if currently in HS/XY mode (not CT) */
+        if (zcl_mode <= 1) {  /* 0=HS, 1=XY (both are color modes) */
+            uint16_t enh_hue = 0;
+            if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                              ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &enh_hue)) {
+                uint16_t hd = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
+                if (hd != state[n].hue) {
+                    state[n].hue = hd;
+                    state[n].color_mode = 0;  /* Safe: only when already in color mode */
+                    changed = true;
+                }
+            }
+
+            uint8_t sat = 0;
+            if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                             ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat)) {
+                if (sat != state[n].saturation) {
+                    state[n].saturation = sat;
+                    state[n].color_mode = 0;  /* Safe: only when already in color mode */
+                    changed = true;
+                }
+            }
+        } else if (zcl_mode == 2) {  /* CT mode - poll color temperature */
+            uint16_t zcl_ct = 0;
+            if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &zcl_ct)) {
+                if (zcl_ct != state[n].color_temp) {
+                    state[n].color_temp = zcl_ct;
+                    changed = true;
+                }
+            }
         }
     }
 
     if (changed) { update_leds(); schedule_save(); }
 
-    esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 50);
+    esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 20);  // 20ms for smoother transitions
 }
 
 /* ================================================================== */
