@@ -173,8 +173,15 @@ static bool read_attr_u8(uint8_t ep, uint16_t cluster, uint16_t attr_id, uint8_t
 /*  without firing a callback — polling is the only detection method.  */
 /* ================================================================== */
 
+static bool s_polling_enabled = true;  /* Disable during preset recall to prevent ZCL reading stale values */
+
 static void color_attr_poll_cb(uint8_t param)
 {
+    /* Skip polling if disabled (e.g., during preset recall before ZCL sync) */
+    if (!s_polling_enabled) {
+        esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 5);
+        return;
+    }
     bool changed = false;
     segment_light_t *state = segment_state_get();
 
@@ -232,7 +239,7 @@ static void color_attr_poll_cb(uint8_t param)
 
     if (changed) { update_leds(); schedule_save(); }
 
-    esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 20);  // 20ms for smoother transitions
+    esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 5);  // 5ms (200Hz) for visually smooth transitions
 }
 
 /* ================================================================== */
@@ -410,7 +417,9 @@ static esp_err_t handle_recall_slot_write(uint8_t slot)
         update_leds();
         schedule_save();
         update_preset_zcl_attrs();
-        /* Defer ZCL sync to avoid stack assertion */
+        /* Disable polling to prevent reading stale ZCL values before sync */
+        s_polling_enabled = false;
+        /* Defer ZCL sync to avoid stack assertion (polling re-enabled after sync) */
         esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);
     } else if (err == ESP_ERR_NOT_FOUND) {
         ESP_LOGW(TAG, "Slot %d is empty, cannot recall", slot);
@@ -595,7 +604,9 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 update_leds();
                 schedule_save();
                 update_preset_zcl_attrs();
-                /* Defer ZCL sync to avoid stack assertion when called from attribute handler */
+                /* Disable polling to prevent reading stale ZCL values before sync */
+                s_polling_enabled = false;
+                /* Defer ZCL sync to avoid stack assertion (polling re-enabled after sync) */
                 esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);  /* 100ms delay */
             } else {
                 ESP_LOGW(TAG, "Preset '%s' not found", name);
@@ -736,6 +747,8 @@ static void sync_zcl_deferred_cb(uint8_t param)
     (void)param;
     ESP_LOGI(TAG, "Deferred ZCL sync after preset recall");
     sync_zcl_from_state();
+    s_polling_enabled = true;  /* Re-enable polling after ZCL sync completes */
+    ESP_LOGI(TAG, "Polling re-enabled after ZCL sync");
 }
 
 void schedule_zcl_sync(void)
