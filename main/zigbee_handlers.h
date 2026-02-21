@@ -46,11 +46,18 @@ void zigbee_factory_reset(void);
 void zigbee_full_factory_reset(void);
 
 /**
- * @brief Start button monitoring task
- *
- * Monitors boot button for factory reset functions
+ * @brief C wrappers for C++ BoardLed API (implemented in main.cpp)
  */
-void button_task_start(void);
+void board_led_set_state_off(void);
+void board_led_set_state_not_joined(void);
+void board_led_set_state_pairing(void);
+void board_led_set_state_joined(void);
+void board_led_set_state_error(void);
+
+/**
+ * @brief Network joined state (for button LED feedback)
+ */
+extern bool s_network_joined;
 
 /**
  * @brief Sync ZCL attribute store from segment state

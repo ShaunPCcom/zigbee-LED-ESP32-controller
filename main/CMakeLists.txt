@@ -1,13 +1,12 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.cpp"
          "led_driver.c"
          "zigbee_init.c"
          "zigbee_handlers.c"
-         "board_led.c"
          "config_storage.c"
          "segment_manager.c"
          "preset_manager.c"
          "led_cli.c"
     INCLUDE_DIRS "."
-    REQUIRES driver esp_timer nvs_flash esp-zigbee-lib transition_engine
+    REQUIRES driver esp_timer nvs_flash esp-zigbee-lib transition_engine board_led zigbee_core
 )

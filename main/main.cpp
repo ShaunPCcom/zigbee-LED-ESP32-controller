@@ -2,7 +2,7 @@
  * @file main.c
  * @brief Main entry point for Zigbee LED Controller
  *
- * Phase 4: Dual physical strip support via SPI time-multiplexing.
+ * Phase 1 (v1.1.0): C++ shared components integration
  * Controls LED strips via Zigbee commands from Home Assistant.
  */
 
@@ -15,19 +15,28 @@
 #include "led_driver.h"
 #include "zigbee_init.h"
 #include "zigbee_handlers.h"
-#include "board_led.h"
 #include "board_config.h"
 #include "config_storage.h"
 #include "led_cli.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
 
+/* C++ shared components */
+#include "board_led.hpp"
+#include "zigbee_button.hpp"
+
 static const char *TAG = "main";
 
-/* Per-strip LED counts — loaded from NVS, used by LED driver and Zigbee init */
-uint16_t g_strip_count[2] = {LED_STRIP_1_COUNT, LED_STRIP_2_COUNT};
+/* Global instances of C++ shared components */
+static BoardLed *g_board_led = nullptr;
+static ButtonHandler *g_button = nullptr;
 
-void app_main(void)
+/* Per-strip LED counts — loaded from NVS, used by LED driver and Zigbee init */
+extern "C" {
+    uint16_t g_strip_count[2] = {LED_STRIP_1_COUNT, LED_STRIP_2_COUNT};
+}
+
+extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Zigbee LED Controller");
@@ -74,9 +83,9 @@ void app_main(void)
         }
     }
 
-    /* Initialize board LED status (uses strip 0, pixels 0-2) */
-    board_led_init();
-    board_led_set_state(BOARD_LED_NOT_JOINED);
+    /* Initialize board LED status (C++ BoardLed class) */
+    g_board_led = new BoardLed(BOARD_LED_GPIO);
+    g_board_led->set_state(BoardLed::State::NOT_JOINED);
 
     /* Initialize LED driver (SPI, both strips) */
     ret = led_driver_init(g_strip_count[0], g_strip_count[1]);
@@ -101,8 +110,28 @@ void app_main(void)
     led_cli_start();
     ESP_LOGI(TAG, "CLI started");
 
-    button_task_start();
-    ESP_LOGI(TAG, "Button task started (GPIO %d)", BOARD_BUTTON_GPIO);
+    /* Initialize button handler (C++ ButtonHandler class) */
+    g_button = new ButtonHandler(BOARD_BUTTON_GPIO,
+                                  BOARD_BUTTON_HOLD_ZIGBEE_MS,
+                                  BOARD_BUTTON_HOLD_FULL_MS);
+    g_button->set_network_reset_callback(zigbee_factory_reset);
+    g_button->set_full_reset_callback(zigbee_full_factory_reset);
+    g_button->set_led_callback([](int state) {
+        switch (state) {
+            case 0: /* Restore previous state */
+                extern bool s_network_joined;
+                g_board_led->set_state(s_network_joined ? BoardLed::State::JOINED : BoardLed::State::NOT_JOINED);
+                break;
+            case 1: /* Amber (NOT_JOINED) */
+                g_board_led->set_state(BoardLed::State::NOT_JOINED);
+                break;
+            case 2: /* Red (ERROR) */
+                g_board_led->set_state(BoardLed::State::ERROR);
+                break;
+        }
+    });
+    g_button->start();
+    ESP_LOGI(TAG, "Button handler started (GPIO %d)", BOARD_BUTTON_GPIO);
 
     ESP_LOGI(TAG, "Device ready! Waiting for Zigbee network pairing...");
     ESP_LOGI(TAG, "Button: 3s=Zigbee reset, 10s=Full reset");
@@ -111,4 +140,25 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(10000));
         ESP_LOGI(TAG, "Uptime: %lld s", esp_timer_get_time() / 1000000);
     }
+}
+
+/* C wrappers for C++ BoardLed API (called from zigbee_handlers.c) */
+extern "C" void board_led_set_state_off(void) {
+    if (g_board_led) g_board_led->set_state(BoardLed::State::OFF);
+}
+
+extern "C" void board_led_set_state_not_joined(void) {
+    if (g_board_led) g_board_led->set_state(BoardLed::State::NOT_JOINED);
+}
+
+extern "C" void board_led_set_state_pairing(void) {
+    if (g_board_led) g_board_led->set_state(BoardLed::State::PAIRING);
+}
+
+extern "C" void board_led_set_state_joined(void) {
+    if (g_board_led) g_board_led->set_state(BoardLed::State::JOINED);
+}
+
+extern "C" void board_led_set_state_error(void) {
+    if (g_board_led) g_board_led->set_state(BoardLed::State::ERROR);
 }
