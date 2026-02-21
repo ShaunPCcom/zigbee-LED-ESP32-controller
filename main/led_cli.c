@@ -45,6 +45,8 @@ static void print_help(void)
         "  led preset save <slot> [name]  (save current state to slot 0-7)\n"
         "  led preset apply <slot>    (recall preset from slot 0-7)\n"
         "  led preset delete <slot>   (delete preset from slot 0-7)\n"
+        "  led transition             (show current global transition time)\n"
+        "  led transition <ms>        (set global transition time in ms, 0-65535)\n"
         "  led nvs                    (NVS health check)\n"
         "  led reboot                 (restart device)\n"
         "  led repair                 (Zigbee network reset / re-pair)\n"
@@ -310,6 +312,23 @@ static void cli_task(void *arg)
                 }
 
                 printf("unknown preset command '%s'\n", subcmd);
+                continue;
+            }
+
+            if (strcmp(cmd, "transition") == 0) {
+                char *ms_str = strtok(NULL, " \t\r\n");
+                if (!ms_str) {
+                    printf("global_transition_ms = %u ms\n",
+                           zigbee_handlers_get_global_transition_ms());
+                } else {
+                    int ms = atoi(ms_str);
+                    if (ms < 0 || ms > 65535) {
+                        printf("error: ms must be 0-65535\n");
+                    } else {
+                        zigbee_handlers_set_global_transition_ms((uint16_t)ms);
+                        printf("global_transition_ms = %u ms\n", (uint16_t)ms);
+                    }
+                }
                 continue;
             }
 

@@ -42,13 +42,14 @@ const CLUSTER_PRESET_CONFIG  = 0xFC02;
 const MAX_SEGMENTS = 8;
 const MAX_PRESETS = 8;
 
-// Device config attributes: led_count (compat alias), strip1_count, strip2_count
+// Device config attributes: led_count (compat alias), strip1_count, strip2_count, global_transition_ms
 const ledCtrlConfigCluster = {
     ID: CLUSTER_DEVICE_CONFIG,
     attributes: {
-        ledCount:    {ID: 0x0000, type: ZCL_UINT16, write: true},
-        strip1Count: {ID: 0x0001, type: ZCL_UINT16, write: true},
-        strip2Count: {ID: 0x0002, type: ZCL_UINT16, write: true},
+        ledCount:            {ID: 0x0000, type: ZCL_UINT16, write: true},
+        strip1Count:         {ID: 0x0001, type: ZCL_UINT16, write: true},
+        strip2Count:         {ID: 0x0002, type: ZCL_UINT16, write: true},
+        globalTransitionMs:  {ID: 0x0003, type: ZCL_UINT16, write: true},
     },
     commands: {},
     commandsResponse: {},
@@ -113,9 +114,10 @@ const fzLocal = {
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
             const result = {};
-            if (msg.data.ledCount    !== undefined) result.led_count    = msg.data.ledCount;
-            if (msg.data.strip1Count !== undefined) result.strip1_count = msg.data.strip1Count;
-            if (msg.data.strip2Count !== undefined) result.strip2_count = msg.data.strip2Count;
+            if (msg.data.ledCount           !== undefined) result.led_count            = msg.data.ledCount;
+            if (msg.data.strip1Count        !== undefined) result.strip1_count         = msg.data.strip1Count;
+            if (msg.data.strip2Count        !== undefined) result.strip2_count         = msg.data.strip2Count;
+            if (msg.data.globalTransitionMs !== undefined) result.global_transition_ms = msg.data.globalTransitionMs;
             return result;
         },
     },
@@ -162,22 +164,24 @@ const fzLocal = {
 // ---- toZigbee ----
 const tzLocal = {
     strip_counts: {
-        key: ['strip1_count', 'strip2_count'],
+        key: ['strip1_count', 'strip2_count', 'global_transition_ms'],
         convertSet: async (entity, key, value, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
             if (key === 'strip1_count') {
                 await ep.write('ledCtrlConfig', {strip1Count: value});
-            } else {
+            } else if (key === 'strip2_count') {
                 await ep.write('ledCtrlConfig', {strip2Count: value});
+            } else if (key === 'global_transition_ms') {
+                await ep.write('ledCtrlConfig', {globalTransitionMs: value});
             }
             return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
-            const attr = key === 'strip1_count' ? 'strip1Count' : 'strip2Count';
-            await ep.read('ledCtrlConfig', [attr]);
+            const attrMap = {strip1_count: 'strip1Count', strip2_count: 'strip2Count', global_transition_ms: 'globalTransitionMs'};
+            await ep.read('ledCtrlConfig', [attrMap[key]]);
         },
     },
     segments: {
@@ -386,6 +390,9 @@ const definition = {
         numericExpose('strip2_count', 'Strip 2 count', ACCESS_ALL,
             'Number of LEDs on strip 2 (0 = disabled, reboot required after change)',
             {value_min: 0, value_max: 500, value_step: 1}),
+        numericExpose('global_transition_ms', 'Global transition time', ACCESS_ALL,
+            'Default transition duration in milliseconds for color and brightness changes',
+            {value_min: 0, value_max: 65535, value_step: 100, unit: 'ms'}),
         ...segExposes,
         ...presetExposes,
     ],

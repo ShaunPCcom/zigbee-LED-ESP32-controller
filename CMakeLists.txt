@@ -6,8 +6,7 @@ cmake_minimum_required(VERSION 3.16)
 set(SUPPORTED_TARGETS esp32h2 esp32c6)
 
 # Add shared component directory for esp32-zigbee-common
-# Temporarily commented for Phase 0 validation - will enable in Phase 1
-# set(EXTRA_COMPONENT_DIRS "/home/shaun/src/esp32-zigbee-common")
+set(EXTRA_COMPONENT_DIRS "/home/shaun/src/esp32-zigbee-common")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(zb_led_controller)

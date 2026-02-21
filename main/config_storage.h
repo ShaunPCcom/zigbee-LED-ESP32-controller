@@ -32,6 +32,17 @@ esp_err_t config_storage_save_strip_count(uint8_t strip, uint16_t count);
  */
 esp_err_t config_storage_load_strip_count(uint8_t strip, uint16_t *count);
 
+/**
+ * @brief Save global transition duration to NVS
+ */
+esp_err_t config_storage_save_global_transition_ms(uint16_t ms);
+
+/**
+ * @brief Load global transition duration from NVS
+ * @return ESP_OK with populated ms, or ESP_ERR_NOT_FOUND if not set
+ */
+esp_err_t config_storage_load_global_transition_ms(uint16_t *ms);
+
 #ifdef __cplusplus
 }
 #endif

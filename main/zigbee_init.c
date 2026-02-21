@@ -23,6 +23,9 @@ extern uint16_t g_strip_count[2];
 
 static const char *TAG = "zb_init";
 
+/* Static buffer for device config cluster attributes */
+static uint16_t s_global_transition_ms_attr = 1000;  /* default 1000ms */
+
 /* Static buffers for preset cluster attributes */
 static uint8_t s_preset_count_attr = 0;
 static uint8_t s_active_preset_attr[17] = {0};       /* DEPRECATED */
@@ -115,15 +118,18 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 
     /* Custom clusters on EP1 only */
     if (seg_idx == 0) {
-        /* 0xFC00: Device config — per-strip LED counts */
+        /* 0xFC00: Device config — per-strip LED counts and global transition time */
         esp_zb_attribute_list_t *dev_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_DEVICE_CONFIG);
         uint16_t s0 = g_strip_count[0], s1 = g_strip_count[1];
+        s_global_transition_ms_attr = zigbee_handlers_get_global_transition_ms();
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_LED_COUNT,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s0);
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP1_COUNT,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s0);
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP2_COUNT,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s1);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_GLOBAL_TRANSITION_MS,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_global_transition_ms_attr);
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, dev_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
         /* 0xFC01: Segment geometry — start + count + strip for each segment */

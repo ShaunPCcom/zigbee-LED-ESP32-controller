@@ -65,3 +65,32 @@ esp_err_t config_storage_load_strip_count(uint8_t strip, uint16_t *count)
     if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NOT_FOUND;
     return err;
 }
+
+esp_err_t config_storage_save_global_transition_ms(uint16_t ms)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_u16(h, "glob_trans", ms);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+
+    if (err != ESP_OK) ESP_LOGE(TAG, "Save global_transition_ms failed: %s", esp_err_to_name(err));
+    return err;
+}
+
+esp_err_t config_storage_load_global_transition_ms(uint16_t *ms)
+{
+    if (!ms) return ESP_ERR_INVALID_ARG;
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
+    if (err != ESP_OK) return err;
+
+    err = nvs_get_u16(h, "glob_trans", ms);
+    nvs_close(h);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+    return err;
+}

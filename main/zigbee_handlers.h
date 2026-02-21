@@ -82,6 +82,22 @@ void schedule_save(void);
  */
 void schedule_zcl_sync(void);
 
+/**
+ * @brief Get the current global transition duration
+ *
+ * @return Duration in milliseconds (0 = instant)
+ */
+uint16_t zigbee_handlers_get_global_transition_ms(void);
+
+/**
+ * @brief Set the global transition duration
+ *
+ * Updates the in-memory value and saves to NVS.
+ *
+ * @param ms  Duration in milliseconds (0 = instant, max 65535)
+ */
+void zigbee_handlers_set_global_transition_ms(uint16_t ms);
+
 #ifdef __cplusplus
 }
 #endif

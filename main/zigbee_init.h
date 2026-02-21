@@ -24,14 +24,16 @@ extern "C" {
 
 /**
  * @brief Custom cluster 0xFC00: Device configuration
- *   0x0000: led_count   (U16) — strip 0 count, backwards-compat alias
- *   0x0001: strip1_count (U16) — strip 0 LED count
- *   0x0002: strip2_count (U16) — strip 1 LED count
+ *   0x0000: led_count            (U16, RW) — strip 0 count, backwards-compat alias
+ *   0x0001: strip1_count         (U16, RW) — strip 0 LED count
+ *   0x0002: strip2_count         (U16, RW) — strip 1 LED count
+ *   0x0003: global_transition_ms (U16, RW) — default transition duration in ms
  */
 #define ZB_CLUSTER_DEVICE_CONFIG        0xFC00
 #define ZB_ATTR_LED_COUNT               0x0000
 #define ZB_ATTR_STRIP1_COUNT            0x0001
 #define ZB_ATTR_STRIP2_COUNT            0x0002
+#define ZB_ATTR_GLOBAL_TRANSITION_MS    0x0003
 
 /**
  * @brief Custom cluster 0xFC01: Segment geometry

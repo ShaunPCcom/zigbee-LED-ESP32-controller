@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "board_config.h"
+#include "transition_engine.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +48,11 @@ typedef struct {
     uint16_t color_y;        /* CIE Y (ZCL format) */
     uint16_t color_temp;     /* Color temperature in mireds (CT mode) */
     uint8_t  startup_on_off; /* Power-on behavior (ZCL StartUpOnOff) */
+    /* Transition engine instances (not persisted — runtime only) */
+    transition_t level_trans; /* brightness 0-254 */
+    transition_t hue_trans;   /* hue 0-360 degrees */
+    transition_t sat_trans;   /* saturation 0-254 */
+    transition_t ct_trans;    /* color temp in mireds */
 } segment_light_t;
 
 /**
@@ -56,6 +62,15 @@ typedef struct {
  *                       Pass g_led_count so segment 1 covers the whole strip.
  */
 void segment_manager_init(uint16_t default_count);
+
+/**
+ * @brief Initialise transition current_values from the NVS-loaded state.
+ *
+ * Call after segment_manager_load() and before registering transitions with
+ * the transition engine.  Sets each transition's current_value to match the
+ * persisted state so the engine starts from the correct value (not 0).
+ */
+void segment_manager_init_transitions(void);
 
 /**
  * @brief Get pointer to geometry array (MAX_SEGMENTS entries)

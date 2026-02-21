@@ -15,12 +15,15 @@
 #include "config_storage.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
+#include "transition_engine.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zcl/esp_zigbee_zcl_common.h"
+#include "zcl/esp_zigbee_zcl_level.h"
+#include "zcl/esp_zigbee_zcl_color_control.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -35,9 +38,6 @@ static bool s_network_joined = false;
 
 /* Transient storage for save_name (for next save_slot operation) */
 static char s_pending_save_name[PRESET_NAME_MAX + 1] = {0};
-
-/* Debounce timer: batch rapid XY/HS attribute updates */
-static esp_timer_handle_t s_color_update_timer = NULL;
 
 /* Debounce timer: avoid NVS write flood */
 static esp_timer_handle_t s_save_timer = NULL;
@@ -91,9 +91,78 @@ static void xy_to_rgb(uint16_t zcl_x, uint16_t zcl_y, uint8_t *r, uint8_t *g, ui
     *b = (uint8_t)(bf * 255.0f + 0.5f);
 }
 
+/**
+ * @brief Normalize hue value to 0-360 range, handling wraparound.
+ *
+ * Converts wrapped negative values (e.g., -60 as 65476) back to 0-360.
+ *
+ * @param hue_raw Raw hue from transition engine (may be wrapped)
+ * @return Normalized hue in 0-360 range
+ */
+static uint16_t normalize_hue(uint16_t hue_raw)
+{
+    if (hue_raw > 360) {
+        /* Wrapped negative value (e.g., -60 = 65476 as uint16_t) */
+        int16_t h = (int16_t)hue_raw;
+        return (uint16_t)((h % 360) + 360);
+    }
+    return hue_raw % 360;
+}
+
+/**
+ * @brief Calculate shortest hue arc for wraparound transitions.
+ *
+ * Adjusts target_hue so the transition takes the shortest path around
+ * the color wheel. Result may be negative or > 360 (will wrap as uint16_t).
+ *
+ * @param current_hue Current hue value (0-360, normalized)
+ * @param target_hue  Desired target hue (0-360, normalized)
+ * @return Adjusted target for shortest arc (may be negative or > 360)
+ */
+static int16_t hue_shortest_arc(uint16_t current_hue, uint16_t target_hue)
+{
+    int16_t current = (int16_t)current_hue;
+    int16_t target = (int16_t)target_hue;
+    int16_t diff = target - current;
+
+    /* If arc > 180°, go the short way */
+    if (diff > 180) {
+        target -= 360;  /* e.g., 10→300 becomes 10→-60 (20° arc through 0) */
+    } else if (diff < -180) {
+        target += 360;  /* e.g., 300→10 becomes 300→370 (70° arc through 360) */
+    }
+
+    return target;
+}
+
+/**
+ * @brief Start a hue transition with automatic shortest-arc calculation.
+ *
+ * Always calculates shortest path around color wheel, even if current
+ * transition value is wrapped from a previous arc-adjusted transition.
+ *
+ * @param hue_trans   Pointer to hue transition_t
+ * @param target_hue  Desired target hue (0-360)
+ * @param duration_ms Transition duration in milliseconds
+ */
+static void start_hue_transition(transition_t *hue_trans, uint16_t target_hue, uint32_t duration_ms)
+{
+    uint16_t current_hue_raw = transition_get_value(hue_trans);
+    uint16_t current_hue = normalize_hue(current_hue_raw);
+    int16_t adjusted_target = hue_shortest_arc(current_hue, target_hue);
+    transition_start(hue_trans, (uint16_t)adjusted_target, duration_ms);
+}
+
 static void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    h %= 360;
+    /* Handle wraparound: negative values (wrapped as large uint16_t) */
+    int16_t h_signed = (int16_t)h;
+    if (h > 360) {
+        /* Wrapped negative (e.g., -60 = 65476 as uint16_t) */
+        h = (uint16_t)((h_signed % 360) + 360);
+    } else {
+        h %= 360;
+    }
     if (s == 0) { *r = *g = *b = v; return; }
 
     uint8_t region    = h / 60;
@@ -116,21 +185,7 @@ static void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g,
 /*  Debounce timers                                                    */
 /* ================================================================== */
 
-static void color_update_timer_cb(void *arg)
-{
-    update_leds();
-    schedule_save();
-}
-
-static void schedule_color_update(void)
-{
-    if (s_color_update_timer == NULL) {
-        esp_timer_create_args_t args = { .callback = color_update_timer_cb, .name = "color_upd" };
-        esp_timer_create(&args, &s_color_update_timer);
-    }
-    esp_timer_stop(s_color_update_timer);
-    esp_timer_start_once(s_color_update_timer, 30000);  /* 30ms */
-}
+/* Color update timer removed — 200Hz render loop handles all updates */
 
 static void save_timer_cb(void *arg)
 {
@@ -148,98 +203,33 @@ void schedule_save(void)
 }
 
 /* ================================================================== */
-/*  ZCL attribute helpers                                              */
+/*  LED render loop (replaces old ZCL polling)                        */
 /* ================================================================== */
 
-static bool read_attr_u16(uint8_t ep, uint16_t cluster, uint16_t attr_id, uint16_t *out)
+/* Global transition duration for preset recalls and explicit color commands.
+ * Units: milliseconds. 0 = instant. Default: 1000ms. */
+static uint16_t g_global_transition_ms = 1000;
+
+uint16_t zigbee_handlers_get_global_transition_ms(void)
 {
-    esp_zb_zcl_attr_t *attr = esp_zb_zcl_get_attribute(ep, cluster,
-                                  ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, attr_id);
-    if (attr && attr->data_p) { *out = *(uint16_t *)attr->data_p; return true; }
-    return false;
+    return g_global_transition_ms;
 }
 
-static bool read_attr_u8(uint8_t ep, uint16_t cluster, uint16_t attr_id, uint8_t *out)
+void zigbee_handlers_set_global_transition_ms(uint16_t ms)
 {
-    esp_zb_zcl_attr_t *attr = esp_zb_zcl_get_attribute(ep, cluster,
-                                  ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, attr_id);
-    if (attr && attr->data_p) { *out = *(uint8_t *)attr->data_p; return true; }
-    return false;
+    g_global_transition_ms = ms;
 }
 
 /* ================================================================== */
-/*  HS color polling (50ms)                                            */
-/*  MoveToHue/MoveToSat commands are handled inside the Zigbee stack  */
-/*  without firing a callback — polling is the only detection method.  */
+/*  LED render loop (200Hz via scheduler alarm)                        */
+/*  Replaces old polling callback. Renders whatever the transition     */
+/*  engine's current_values are at each call.                         */
 /* ================================================================== */
 
-static bool s_polling_enabled = true;  /* Disable during preset recall to prevent ZCL reading stale values */
-
-static void color_attr_poll_cb(uint8_t param)
+static void led_render_cb(uint8_t param)
 {
-    /* Skip polling if disabled (e.g., during preset recall before ZCL sync) */
-    if (!s_polling_enabled) {
-        esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 5);
-        return;
-    }
-    bool changed = false;
-    segment_light_t *state = segment_state_get();
-
-    for (int n = 0; n < MAX_SEGMENTS; n++) {
-        uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
-
-        /* Read current color mode from ZCL first */
-        uint8_t zcl_mode = state[n].color_mode;  /* default to in-memory */
-        read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                     ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &zcl_mode);
-
-        /* Poll brightness level for smooth transitions (applies to all modes) */
-        uint8_t zcl_level = 0;
-        if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
-                        ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &zcl_level)) {
-            if (zcl_level != state[n].level) {
-                state[n].level = zcl_level;
-                changed = true;
-            }
-        }
-
-        /* Only poll and update HS values if currently in HS/XY mode (not CT) */
-        if (zcl_mode <= 1) {  /* 0=HS, 1=XY (both are color modes) */
-            uint16_t enh_hue = 0;
-            if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                              ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &enh_hue)) {
-                uint16_t hd = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
-                if (hd != state[n].hue) {
-                    state[n].hue = hd;
-                    state[n].color_mode = 0;  /* Safe: only when already in color mode */
-                    changed = true;
-                }
-            }
-
-            uint8_t sat = 0;
-            if (read_attr_u8(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                             ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat)) {
-                if (sat != state[n].saturation) {
-                    state[n].saturation = sat;
-                    state[n].color_mode = 0;  /* Safe: only when already in color mode */
-                    changed = true;
-                }
-            }
-        } else if (zcl_mode == 2) {  /* CT mode - poll color temperature */
-            uint16_t zcl_ct = 0;
-            if (read_attr_u16(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &zcl_ct)) {
-                if (zcl_ct != state[n].color_temp) {
-                    state[n].color_temp = zcl_ct;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    if (changed) { update_leds(); schedule_save(); }
-
-    esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 5);  // 5ms (200Hz) for visually smooth transitions
+    update_leds();
+    esp_zb_scheduler_alarm(led_render_cb, 0, 5);
 }
 
 /* ================================================================== */
@@ -324,22 +314,29 @@ void update_leds(void)
         uint8_t r = 0, g = 0, b = 0, w = 0;
 
         if (state[n].on) {
+            /* Read interpolated values from transition engine */
+            uint8_t  level = (uint8_t)transition_get_value(&state[n].level_trans);
+            uint16_t hue   = transition_get_value(&state[n].hue_trans);
+            uint8_t  sat   = (uint8_t)transition_get_value(&state[n].sat_trans);
+            uint16_t ct    = transition_get_value(&state[n].ct_trans);
+
             if (state[n].color_mode == 2) {
                 /* CT mode: drive White channel with brightness */
-                w = state[n].level;
+                w = level;
             } else if (state[n].color_mode == 1) {
-                /* XY mode */
+                /* XY mode: color_x/y don't transition, use direct state */
                 xy_to_rgb(state[n].color_x, state[n].color_y, &r, &g, &b);
-                r = (uint8_t)((uint32_t)r * state[n].level / 254);
-                g = (uint8_t)((uint32_t)g * state[n].level / 254);
-                b = (uint8_t)((uint32_t)b * state[n].level / 254);
+                r = (uint8_t)((uint32_t)r * level / 254);
+                g = (uint8_t)((uint32_t)g * level / 254);
+                b = (uint8_t)((uint32_t)b * level / 254);
             } else {
                 /* HS mode */
-                hsv_to_rgb(state[n].hue, state[n].saturation, 255, &r, &g, &b);
-                r = (uint8_t)((uint32_t)r * state[n].level / 254);
-                g = (uint8_t)((uint32_t)g * state[n].level / 254);
-                b = (uint8_t)((uint32_t)b * state[n].level / 254);
+                hsv_to_rgb(hue, sat, 255, &r, &g, &b);
+                r = (uint8_t)((uint32_t)r * level / 254);
+                g = (uint8_t)((uint32_t)g * level / 254);
+                b = (uint8_t)((uint32_t)b * level / 254);
             }
+            (void)ct;  /* ct used in CT mode via level, kept for future use */
         }
 
         uint8_t strip = geom[n].strip_id;
@@ -414,12 +411,17 @@ static esp_err_t handle_recall_slot_write(uint8_t slot)
     esp_err_t err = preset_manager_recall(slot);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "Recalled preset from slot %d", slot);
-        update_leds();
+        /* Start transitions from current engine values to new preset values */
+        segment_light_t *state = segment_state_get();
+        for (int i = 0; i < MAX_SEGMENTS; i++) {
+            transition_start(&state[i].level_trans, state[i].level, g_global_transition_ms);
+            start_hue_transition(&state[i].hue_trans, state[i].hue, g_global_transition_ms);
+            transition_start(&state[i].sat_trans, state[i].saturation, g_global_transition_ms);
+            transition_start(&state[i].ct_trans, state[i].color_temp, g_global_transition_ms);
+        }
         schedule_save();
         update_preset_zcl_attrs();
-        /* Disable polling to prevent reading stale ZCL values before sync */
-        s_polling_enabled = false;
-        /* Defer ZCL sync to avoid stack assertion (polling re-enabled after sync) */
+        /* Defer ZCL sync to avoid stack assertion */
         esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);
     } else if (err == ESP_ERR_NOT_FOUND) {
         ESP_LOGW(TAG, "Slot %d is empty, cannot recall", slot);
@@ -535,6 +537,13 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
     /* Custom cluster: device config (EP1 only) */
     if (cluster == ZB_CLUSTER_DEVICE_CONFIG) {
+        if (attr_id == ZB_ATTR_GLOBAL_TRANSITION_MS) {
+            uint16_t ms = *(uint16_t *)value;
+            g_global_transition_ms = ms;
+            config_storage_save_global_transition_ms(ms);
+            ESP_LOGI(TAG, "global_transition_ms -> %u ms", ms);
+            return ESP_OK;
+        }
         uint16_t new_count = *(uint16_t *)value;
         if (new_count >= 1 && new_count <= 500) {
             uint8_t strip = (attr_id == ZB_ATTR_STRIP2_COUNT) ? 1 : 0;
@@ -601,13 +610,18 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
         if (attr_id == ZB_ATTR_RECALL_PRESET) {
             if (preset_manager_recall_by_name(name)) {
                 ESP_LOGI(TAG, "Recalled preset '%s' (deprecated API)", name);
-                update_leds();
+                /* Start transitions to new preset values */
+                segment_light_t *state = segment_state_get();
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    transition_start(&state[i].level_trans, state[i].level, g_global_transition_ms);
+                    start_hue_transition(&state[i].hue_trans, state[i].hue, g_global_transition_ms);
+                    transition_start(&state[i].sat_trans, state[i].saturation, g_global_transition_ms);
+                    transition_start(&state[i].ct_trans, state[i].color_temp, g_global_transition_ms);
+                }
                 schedule_save();
                 update_preset_zcl_attrs();
-                /* Disable polling to prevent reading stale ZCL values before sync */
-                s_polling_enabled = false;
-                /* Defer ZCL sync to avoid stack assertion (polling re-enabled after sync) */
-                esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);  /* 100ms delay */
+                /* Defer ZCL sync to avoid stack assertion */
+                esp_zb_scheduler_alarm(sync_zcl_deferred_cb, 0, 100);
             } else {
                 ESP_LOGW(TAG, "Preset '%s' not found", name);
             }
@@ -639,6 +653,8 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
                 state[seg].on = *(bool *)value;
                 ESP_LOGI(TAG, "Seg%d on/off -> %s", seg + 1, state[seg].on ? "ON" : "OFF");
+                /* Snap level_trans to current level instantly (on/off does not fade) */
+                transition_start(&state[seg].level_trans, state[seg].level, 0);
                 needs_update = true;
             } else if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF) {
                 state[seg].startup_on_off = *(uint8_t *)value;
@@ -649,6 +665,8 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             if (attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID) {
                 state[seg].level = *(uint8_t *)value;
                 ESP_LOGI(TAG, "Seg%d level -> %d", seg + 1, state[seg].level);
+                /* Start transition to new level with global duration */
+                transition_start(&state[seg].level_trans, state[seg].level, g_global_transition_ms);
                 needs_update = true;
             }
         } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL) {
@@ -656,33 +674,32 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID:
                 state[seg].hue = zcl_hue_to_degrees(*(uint8_t *)value);
                 state[seg].color_mode = 0;
-                schedule_color_update();
+                start_hue_transition(&state[seg].hue_trans, state[seg].hue, g_global_transition_ms);
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID: {
                 uint16_t eh = *(uint16_t *)value;
                 state[seg].hue = (uint16_t)((uint32_t)eh * 360 / 65535);
                 state[seg].color_mode = 0;
-                schedule_color_update();
+                start_hue_transition(&state[seg].hue_trans, state[seg].hue, g_global_transition_ms);
                 break;
             }
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID:
                 state[seg].saturation = *(uint8_t *)value;
-                schedule_color_update();
+                transition_start(&state[seg].sat_trans, state[seg].saturation, g_global_transition_ms);
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID:
                 state[seg].color_x = *(uint16_t *)value;
                 state[seg].color_mode = 1;
-                schedule_color_update();
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID:
                 state[seg].color_y = *(uint16_t *)value;
                 state[seg].color_mode = 1;
-                schedule_color_update();
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID:
                 state[seg].color_temp = *(uint16_t *)value;
                 state[seg].color_mode = 2;
                 ESP_LOGI(TAG, "Seg%d CT -> %u mireds", seg + 1, state[seg].color_temp);
+                transition_start(&state[seg].ct_trans, state[seg].color_temp, g_global_transition_ms);
                 needs_update = true;
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID:
@@ -747,8 +764,6 @@ static void sync_zcl_deferred_cb(uint8_t param)
     (void)param;
     ESP_LOGI(TAG, "Deferred ZCL sync after preset recall");
     sync_zcl_from_state();
-    s_polling_enabled = true;  /* Re-enable polling after ZCL sync completes */
-    ESP_LOGI(TAG, "Polling re-enabled after ZCL sync");
 }
 
 void schedule_zcl_sync(void)
@@ -774,7 +789,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         sync_zcl_from_state();
         board_led_set_state(BOARD_LED_PAIRING);
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
-        esp_zb_scheduler_alarm(color_attr_poll_cb, 0, 50);
+        esp_zb_scheduler_alarm(led_render_cb, 0, 50);
         break;
 
     case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START:
