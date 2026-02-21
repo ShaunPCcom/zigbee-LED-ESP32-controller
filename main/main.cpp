@@ -20,6 +20,7 @@
 #include "led_cli.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
+#include "transition_engine.h"
 
 /* C++ shared components */
 #include "board_led.hpp"
@@ -66,6 +67,25 @@ extern "C" void app_main(void)
     /* Initialize segment manager (segment 1 defaults to full strip 0 length) */
     segment_manager_init(g_strip_count[0]);
     segment_manager_load();
+
+    /* Initialize transition engine (200Hz for smooth transitions) */
+    ESP_ERROR_CHECK(transition_engine_init(200));
+    ESP_LOGI(TAG, "Transition engine initialized at 200Hz");
+
+    /* Register all segment transitions with the engine */
+    {
+        segment_light_t *state = segment_state_get();
+        for (int i = 0; i < MAX_SEGMENTS; i++) {
+            ESP_ERROR_CHECK(transition_register(&state[i].level_trans));
+            ESP_ERROR_CHECK(transition_register(&state[i].hue_trans));
+            ESP_ERROR_CHECK(transition_register(&state[i].sat_trans));
+            ESP_ERROR_CHECK(transition_register(&state[i].ct_trans));
+        }
+        ESP_LOGI(TAG, "Registered %d transitions (4 per segment)", MAX_SEGMENTS * 4);
+    }
+
+    /* Initialize transition current values from loaded state */
+    segment_manager_init_transitions();
 
     /* Initialize preset manager */
     preset_manager_init();

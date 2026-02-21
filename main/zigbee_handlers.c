@@ -227,6 +227,69 @@ void zigbee_handlers_set_global_transition_ms(uint16_t ms)
 
 static void led_render_cb(uint8_t param)
 {
+    /* Poll attributes (SDK handles some commands internally, no callbacks) */
+    segment_light_t *state = segment_state_get();
+    for (int n = 0; n < MAX_SEGMENTS; n++) {
+        uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
+
+        /* Read color mode to decide what to poll */
+        esp_zb_zcl_attr_t *attr_mode = esp_zb_zcl_get_attribute(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID);
+        uint8_t zcl_mode = (attr_mode && attr_mode->data_p) ? *(uint8_t *)attr_mode->data_p : 0;
+
+        /* Read brightness (level) - applies to all modes */
+        esp_zb_zcl_attr_t *attr_level = esp_zb_zcl_get_attribute(ep, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID);
+        if (attr_level && attr_level->data_p) {
+            uint8_t new_level = *(uint8_t *)attr_level->data_p;
+            if (new_level != state[n].level) {
+                state[n].level = new_level;
+                transition_start(&state[n].level_trans, new_level, g_global_transition_ms);
+            }
+        }
+
+        /* Only poll HS in HS/XY color modes (0 or 1), not CT mode (2) */
+        if (zcl_mode <= 1) {
+            /* Read enhanced hue (16-bit, 0-65535 maps to 0-360°) */
+            esp_zb_zcl_attr_t *attr_hue = esp_zb_zcl_get_attribute(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID);
+            if (attr_hue && attr_hue->data_p) {
+                uint16_t enh_hue = *(uint16_t *)attr_hue->data_p;
+                uint16_t new_hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
+                if (new_hue != state[n].hue) {
+                    state[n].hue = new_hue;
+                    state[n].color_mode = zcl_mode;
+                    /* Instant color change (no transition) - hue wraparound needs debugging */
+                    transition_start(&state[n].hue_trans, new_hue, 0);
+                }
+            }
+
+            /* Read saturation */
+            esp_zb_zcl_attr_t *attr_sat = esp_zb_zcl_get_attribute(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID);
+            if (attr_sat && attr_sat->data_p) {
+                uint8_t new_sat = *(uint8_t *)attr_sat->data_p;
+                if (new_sat != state[n].saturation) {
+                    state[n].saturation = new_sat;
+                    /* Instant saturation change (no transition) */
+                    transition_start(&state[n].sat_trans, new_sat, 0);
+                }
+            }
+        } else if (zcl_mode == 2) {
+            /* CT (white) mode - poll color temperature */
+            esp_zb_zcl_attr_t *attr_ct = esp_zb_zcl_get_attribute(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
+            if (attr_ct && attr_ct->data_p) {
+                uint16_t new_ct = *(uint16_t *)attr_ct->data_p;
+                if (new_ct != state[n].color_temp) {
+                    state[n].color_temp = new_ct;
+                    state[n].color_mode = 2;
+                    transition_start(&state[n].ct_trans, new_ct, g_global_transition_ms);
+                }
+            }
+        }
+    }
+
     update_leds();
     esp_zb_scheduler_alarm(led_render_cb, 0, 5);
 }
@@ -414,8 +477,8 @@ static esp_err_t handle_recall_slot_write(uint8_t slot)
         segment_light_t *state = segment_state_get();
         for (int i = 0; i < MAX_SEGMENTS; i++) {
             transition_start(&state[i].level_trans, state[i].level, g_global_transition_ms);
-            start_hue_transition(&state[i].hue_trans, state[i].hue, g_global_transition_ms);
-            transition_start(&state[i].sat_trans, state[i].saturation, g_global_transition_ms);
+            transition_start(&state[i].hue_trans, state[i].hue, 0);  /* Instant - hue wraparound disabled */
+            transition_start(&state[i].sat_trans, state[i].saturation, 0);  /* Instant */
             transition_start(&state[i].ct_trans, state[i].color_temp, g_global_transition_ms);
         }
         schedule_save();
@@ -613,8 +676,8 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 segment_light_t *state = segment_state_get();
                 for (int i = 0; i < MAX_SEGMENTS; i++) {
                     transition_start(&state[i].level_trans, state[i].level, g_global_transition_ms);
-                    start_hue_transition(&state[i].hue_trans, state[i].hue, g_global_transition_ms);
-                    transition_start(&state[i].sat_trans, state[i].saturation, g_global_transition_ms);
+                    transition_start(&state[i].hue_trans, state[i].hue, 0);  /* Instant - hue wraparound disabled */
+                    transition_start(&state[i].sat_trans, state[i].saturation, 0);  /* Instant */
                     transition_start(&state[i].ct_trans, state[i].color_temp, g_global_transition_ms);
                 }
                 schedule_save();
@@ -673,13 +736,13 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID:
                 state[seg].hue = zcl_hue_to_degrees(*(uint8_t *)value);
                 state[seg].color_mode = 0;
-                start_hue_transition(&state[seg].hue_trans, state[seg].hue, g_global_transition_ms);
+                transition_start(&state[seg].hue_trans, state[seg].hue, 0);  /* Instant - hue wraparound disabled */
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID: {
                 uint16_t eh = *(uint16_t *)value;
                 state[seg].hue = (uint16_t)((uint32_t)eh * 360 / 65535);
                 state[seg].color_mode = 0;
-                start_hue_transition(&state[seg].hue_trans, state[seg].hue, g_global_transition_ms);
+                transition_start(&state[seg].hue_trans, state[seg].hue, 0);  /* Instant - hue wraparound disabled */
                 break;
             }
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID:
