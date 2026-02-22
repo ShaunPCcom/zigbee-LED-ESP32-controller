@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.16)
 # Set the supported chips
 set(SUPPORTED_TARGETS esp32h2 esp32c6)
 
-# Add shared component directory for esp32-zigbee-common
-set(EXTRA_COMPONENT_DIRS "/home/shaun/src/esp32-zigbee-common")
+# Shared components (board_led, zigbee_core) are managed via idf_component.yml
+# using ESP-IDF Component Manager, fetched from GitHub during build
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(zb_led_controller)

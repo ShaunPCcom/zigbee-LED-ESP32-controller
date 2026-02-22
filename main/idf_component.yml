@@ -6,3 +6,9 @@ dependencies:
   espressif/esp-zboss-lib: '*'
   zigbee_ota:
     git: https://github.com/ShaunPCcom/esp32-zigbee-ota.git
+  board_led:
+    git: https://github.com/ShaunPCcom/esp32-zigbee-common.git
+    path: board_led
+  zigbee_core:
+    git: https://github.com/ShaunPCcom/esp32-zigbee-common.git
+    path: zigbee_core
