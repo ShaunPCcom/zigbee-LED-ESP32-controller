@@ -14,6 +14,7 @@
 #include "board_config.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
+#include "version.h"
 #include "esp_log.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zigbee_ota.h"
@@ -210,11 +211,11 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         zigbee_ota_config_t ota_cfg = ZIGBEE_OTA_CONFIG_DEFAULT();
         ota_cfg.manufacturer_code = 0x131B;  /* Espressif */
         ota_cfg.image_type = 0x0002;         /* LED Controller (different from LD2450) */
-        ota_cfg.current_file_version = 0x00010100;  /* v1.1.1 */
+        ota_cfg.current_file_version = FIRMWARE_VERSION;
         ota_cfg.hw_version = 1;
         ota_cfg.query_interval_minutes = 1440;  /* Check every 24 hours */
         ESP_ERROR_CHECK(zigbee_ota_init(cl, ZB_SEGMENT_EP_BASE, &ota_cfg));
-        ESP_LOGI(TAG, "OTA cluster initialized on EP%d (v1.0.0.4)", ZB_SEGMENT_EP_BASE);
+        ESP_LOGI(TAG, "OTA cluster initialized on EP%d (%s)", ZB_SEGMENT_EP_BASE, FIRMWARE_VERSION_STRING);
     }
 
     return cl;

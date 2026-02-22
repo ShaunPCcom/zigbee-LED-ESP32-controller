@@ -52,11 +52,19 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
 
-          # Check zigbee_init.c for OTA version
-          if ! grep -q "current_file_version = ${FILE_VERSION_HEX}" main/zigbee_init.c; then
-            echo "❌ ERROR: Version mismatch in main/zigbee_init.c"
-            echo "Expected: current_file_version = ${FILE_VERSION_HEX}"
-            echo "Please update main/zigbee_init.c to match tag ${GITHUB_REF#refs/tags/}"
+          # Check main/version.h for firmware version constant
+          if ! grep -q "#define FIRMWARE_VERSION ${FILE_VERSION_HEX}" main/version.h; then
+            echo "❌ ERROR: Version mismatch in main/version.h"
+            echo "Expected: #define FIRMWARE_VERSION ${FILE_VERSION_HEX}"
+            echo "Please update main/version.h to match tag ${GITHUB_REF#refs/tags/}"
+            exit 1
+          fi
+
+          # Check that version string matches
+          if ! grep -q "#define FIRMWARE_VERSION_STRING \"v${VERSION}\"" main/version.h; then
+            echo "❌ ERROR: Version string mismatch in main/version.h"
+            echo "Expected: #define FIRMWARE_VERSION_STRING \"v${VERSION}\""
+            echo "Please update main/version.h to match tag ${GITHUB_REF#refs/tags/}"
             exit 1
           fi
 

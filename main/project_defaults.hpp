@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>  // uint8_t, uint16_t, uint32_t types
+#include "version.h"  // FIRMWARE_VERSION, FIRMWARE_VERSION_STRING
 
 /**
  * @file project_defaults.hpp
@@ -44,6 +45,9 @@
  */
 
 namespace defaults {
+
+// Note: FIRMWARE_VERSION and FIRMWARE_VERSION_STRING are defined in version.h
+// and available globally to both C and C++ code.
 
 // ============================================================================
 // Hardware Configuration - ESP32-H2 GPIO Pin Assignments
