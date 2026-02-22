@@ -49,6 +49,7 @@ static esp_zb_attribute_list_t *create_color_cluster(void)
     uint16_t ehue = 0, cx = 0x616B, cy = 0x607D;
     uint16_t ctemp = 250, ctemp_min = 153, ctemp_max = 370;
 
+    /* Hue/saturation attributes exist for SDK compatibility but are not used (XY mode only) */
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID, &hue);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, &sat);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID, &ehue);
@@ -60,8 +61,8 @@ static esp_zb_attribute_list_t *create_color_cluster(void)
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &cmode);
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_COLOR_MODE_ID, &ecmode);
 
-    /* Capabilities: HS | EnhancedHue | XY | ColorTemp */
-    uint16_t caps = 0x0001 | 0x0002 | 0x0008 | 0x0010;
+    /* Capabilities: Enhanced Hue | ColorTemp (basic HS disabled - use 16-bit enhanced hue only) */
+    uint16_t caps = 0x0002 | 0x0010;
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_CAPABILITIES_ID, &caps);
 
     return color;

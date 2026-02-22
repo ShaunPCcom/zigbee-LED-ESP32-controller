@@ -3,7 +3,7 @@
  *
  * Device: 8 virtual segments on dual LED strips (EP1-EP8).
  * Each segment is an Extended Color Light:
- *   - Color mode (HS/XY) drives RGB channels
+ *   - Color mode (Enhanced Hue 16-bit + Saturation) drives RGB channels
  *   - Color temperature mode drives the White channel
  *
  * Segment 1 (EP1) defaults to covering the full strip and acts as the base layer.
@@ -243,7 +243,6 @@ const tzLocal = {
                                 await segEp.read('genLevelCtrl', ['currentLevel']);
                                 await segEp.read('lightingColorCtrl', [
                                     'enhancedCurrentHue', 'currentSaturation',
-                                    'currentX', 'currentY',
                                     'colorTemperature', 'colorMode'
                                 ]);
                             } catch (error) {
@@ -358,7 +357,7 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
 }
 
 // ---- 8 segment light extends (EP1-EP8) ----
-// Each segment is a Color Dimmable Light with both color (HS) and color_temp (CT=white)
+// Each segment is a Color Dimmable Light with enhanced hue (16-bit precision) and color_temp (CT=white)
 const segLightExtends = [];
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
     segLightExtends.push(light({

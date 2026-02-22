@@ -30,8 +30,6 @@ typedef struct {
     uint16_t hue;
     uint8_t  saturation;
     uint8_t  color_mode;
-    uint16_t color_x;
-    uint16_t color_y;
     uint16_t color_temp;
     uint8_t  startup_on_off;
 } segment_light_nvs_t;
@@ -127,8 +125,6 @@ void segment_manager_load(void)
                 s_state[i].hue          = nvs_state[i].hue;
                 s_state[i].saturation   = nvs_state[i].saturation;
                 s_state[i].color_mode   = nvs_state[i].color_mode;
-                s_state[i].color_x      = nvs_state[i].color_x;
-                s_state[i].color_y      = nvs_state[i].color_y;
                 s_state[i].color_temp   = nvs_state[i].color_temp;
                 s_state[i].startup_on_off = nvs_state[i].startup_on_off;
             }
@@ -174,8 +170,6 @@ void segment_manager_save(void)
         nvs_state[i].hue          = s_state[i].hue;
         nvs_state[i].saturation   = s_state[i].saturation;
         nvs_state[i].color_mode   = s_state[i].color_mode;
-        nvs_state[i].color_x      = s_state[i].color_x;
-        nvs_state[i].color_y      = s_state[i].color_y;
         nvs_state[i].color_temp   = s_state[i].color_temp;
         nvs_state[i].startup_on_off = s_state[i].startup_on_off;
     }
