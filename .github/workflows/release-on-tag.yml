@@ -31,11 +31,11 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
           # Convert version to hex for fileVersion (use clean version for numbers)
-          IFS='.' read -r major minor patch build <<< "$VERSION_CLEAN"
+          IFS='.' read -r major minor build <<< "$VERSION_CLEAN"
           if [ -z "$build" ]; then build=0; fi
 
           # Calculate hex fileVersion: (major << 16) | (minor << 8) | build
-          # Format: 0x00MMmmBB where MM=major, mm=minor, BB=build (patch unused)
+          # Format: 0x00MMNNBB where MM=major, NN=minor, BB=build
           file_version_dec=$((major * 65536 + minor * 256 + build))
           file_version=$(printf "0x%08x" $file_version_dec)
 
