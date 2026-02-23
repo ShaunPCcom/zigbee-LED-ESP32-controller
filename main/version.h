@@ -21,13 +21,14 @@ extern "C" {
 /**
  * Firmware version for OTA updates
  *
- * Format: 0x00MMNNBB where MM=major, NN=minor, BB=build
- * - v1.1.1 = 0x00010100
+ * Format: 0x00MMNNPP where MM=major, NN=minor, PP=patch
+ * - v1.0.0.1 = 0x00010001
+ * - v1.1.2 = 0x00010102
  * - Major version change: Incompatible API/behavior changes
  * - Minor version change: New features, backward compatible
- * - Build number: Bug fixes, patches
+ * - Patch number: Bug fixes, patches
  */
-#define FIRMWARE_VERSION 0x00010200
+#define FIRMWARE_VERSION 0x00010102
 
 /**
  * Firmware version as string for logging
