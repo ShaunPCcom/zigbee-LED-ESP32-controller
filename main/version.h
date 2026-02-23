@@ -28,7 +28,7 @@ extern "C" {
  * - Minor version change: New features, backward compatible
  * - Patch number: Bug fixes, patches
  */
-#define FIRMWARE_VERSION 0x00010102
+#define FIRMWARE_VERSION 0x00010103
 
 /**
  * Firmware version as string for logging
@@ -36,7 +36,7 @@ extern "C" {
  * Used in log messages to display human-readable version.
  * Keep in sync with FIRMWARE_VERSION above.
  */
-#define FIRMWARE_VERSION_STRING "v1.1.2"
+#define FIRMWARE_VERSION_STRING "v1.1.3"
 
 #ifdef __cplusplus
 }
