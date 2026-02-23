@@ -21,6 +21,7 @@
 #include "segment_manager.h"
 #include "preset_manager.h"
 #include "transition_engine.h"
+#include "version.h"
 
 /* C++ shared components */
 #include "board_led.hpp"
@@ -40,7 +41,7 @@ extern "C" {
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "  Zigbee LED Controller");
+    ESP_LOGI(TAG, "  Zigbee LED Controller %s", FIRMWARE_VERSION_STRING);
     ESP_LOGI(TAG, "========================================");
 
     /* Initialize NVS */
