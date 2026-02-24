@@ -83,13 +83,12 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
     };
     esp_zb_attribute_list_t *basic = esp_zb_basic_cluster_create(&basic_cfg);
 
-    /* Add manufacturer/model only on the primary endpoint */
-    if (seg_idx == 0) {
-        uint8_t manufacturer[] = {3, 'D', 'I', 'Y'};
-        uint8_t model[] = {11, 'Z', 'B', '_', 'L', 'E', 'D', '_', 'C', 'T', 'R', 'L'};
-        esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, manufacturer);
-        esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, model);
-    }
+    /* Add manufacturer/model/version to ALL segments (prevents re-interview unsupported issue) */
+    static const uint8_t manufacturer[] = {3, 'D', 'I', 'Y'};
+    static const uint8_t model[] = {11, 'Z', 'B', '_', 'L', 'E', 'D', '_', 'C', 'T', 'R', 'L'};
+    esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, (void*)manufacturer);
+    esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, (void*)model);
+    esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, (void*)FIRMWARE_SW_BUILD_ID);
 
     esp_zb_identify_cluster_cfg_t identify_cfg = {
         .identify_time = ESP_ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE,
