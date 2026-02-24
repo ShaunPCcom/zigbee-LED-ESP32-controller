@@ -50,20 +50,28 @@ jobs:
       - name: Validate version in code
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
+          MAJOR="${{ steps.version.outputs.major }}"
+          MINOR="${{ steps.version.outputs.minor }}"
+          PATCH="${{ steps.version.outputs.patch }}"
 
-          # Check main/version.h for firmware version constant
-          if ! grep -q "#define FIRMWARE_VERSION ${FILE_VERSION_HEX}" main/version.h; then
-            echo "❌ ERROR: Version mismatch in main/version.h"
-            echo "Expected: #define FIRMWARE_VERSION ${FILE_VERSION_HEX}"
+          # Check main/version.h for version component constants
+          if ! grep -q "#define FW_VERSION_MAJOR ${MAJOR}" main/version.h; then
+            echo "❌ ERROR: FW_VERSION_MAJOR mismatch in main/version.h"
+            echo "Expected: #define FW_VERSION_MAJOR ${MAJOR}"
             echo "Please update main/version.h to match tag ${GITHUB_REF#refs/tags/}"
             exit 1
           fi
 
-          # Check that version string matches
-          if ! grep -q "#define FIRMWARE_VERSION_STRING \"v${VERSION}\"" main/version.h; then
-            echo "❌ ERROR: Version string mismatch in main/version.h"
-            echo "Expected: #define FIRMWARE_VERSION_STRING \"v${VERSION}\""
+          if ! grep -q "#define FW_VERSION_MINOR ${MINOR}" main/version.h; then
+            echo "❌ ERROR: FW_VERSION_MINOR mismatch in main/version.h"
+            echo "Expected: #define FW_VERSION_MINOR ${MINOR}"
+            echo "Please update main/version.h to match tag ${GITHUB_REF#refs/tags/}"
+            exit 1
+          fi
+
+          if ! grep -q "#define FW_VERSION_PATCH ${PATCH}" main/version.h; then
+            echo "❌ ERROR: FW_VERSION_PATCH mismatch in main/version.h"
+            echo "Expected: #define FW_VERSION_PATCH ${PATCH}"
             echo "Please update main/version.h to match tag ${GITHUB_REF#refs/tags/}"
             exit 1
           fi
