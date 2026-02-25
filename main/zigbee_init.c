@@ -10,7 +10,9 @@
  */
 
 #include "zigbee_init.h"
-#include "zigbee_handlers.h"
+#include "zigbee_signal_handlers.h"
+#include "zigbee_attr_handler.h"
+#include "led_renderer.h"
 #include "board_config.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
@@ -122,7 +124,7 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         /* 0xFC00: Device config — per-strip LED counts and global transition time */
         esp_zb_attribute_list_t *dev_cfg = esp_zb_zcl_attr_list_create(ZB_CLUSTER_DEVICE_CONFIG);
         uint16_t s0 = g_strip_count[0], s1 = g_strip_count[1];
-        s_global_transition_ms_attr = zigbee_handlers_get_global_transition_ms();
+        s_global_transition_ms_attr = led_renderer_get_global_transition_ms();
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_LED_COUNT,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s0);
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP1_COUNT,

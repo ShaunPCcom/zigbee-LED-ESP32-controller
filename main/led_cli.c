@@ -23,7 +23,8 @@
 #include "config_storage.h"
 #include "segment_manager.h"
 #include "preset_manager.h"
-#include "zigbee_handlers.h"
+#include "zigbee_signal_handlers.h"
+#include "led_renderer.h"
 
 static const char *TAG = "led_cli";
 
@@ -319,13 +320,13 @@ static void cli_task(void *arg)
                 char *ms_str = strtok(NULL, " \t\r\n");
                 if (!ms_str) {
                     printf("global_transition_ms = %u ms\n",
-                           zigbee_handlers_get_global_transition_ms());
+                           led_renderer_get_global_transition_ms());
                 } else {
                     int ms = atoi(ms_str);
                     if (ms < 0 || ms > 65535) {
                         printf("error: ms must be 0-65535\n");
                     } else {
-                        zigbee_handlers_set_global_transition_ms((uint16_t)ms);
+                        led_renderer_set_global_transition_ms((uint16_t)ms);
                         printf("global_transition_ms = %u ms\n", (uint16_t)ms);
                     }
                 }
