@@ -11,6 +11,7 @@
 #include "led_renderer.h"
 #include "segment_manager.h"
 #include "config_storage.h"
+#include "color_engine.h"
 #include "transition_engine.h"
 #include "zigbee_init.h"
 #include "preset_manager.h"
@@ -120,10 +121,19 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
         if (cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
             if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
-                state[seg].on = *(bool *)value;
+                bool new_on = *(bool *)value;
+                bool was_on = state[seg].on;
+                state[seg].on = new_on;
                 ESP_LOGI(TAG, "Seg%d on/off -> %s", seg + 1, state[seg].on ? "ON" : "OFF");
-                /* Snap level_trans to current level instantly (on/off does not fade) */
-                transition_start(&state[seg].level_trans, state[seg].level, 0);
+
+                if (new_on && !was_on) {
+                    /* Turning ON: Start from 0 (dark) and fade to target level */
+                    transition_start(&state[seg].level_trans, 0, 0);  /* Instant to 0 */
+                    transition_start(&state[seg].level_trans, state[seg].level, led_renderer_get_global_transition_ms());
+                } else if (!new_on && was_on) {
+                    /* Turning OFF: Fade from current level to 0 */
+                    transition_start(&state[seg].level_trans, 0, led_renderer_get_global_transition_ms());
+                }
                 needs_update = true;
             } else if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF) {
                 state[seg].startup_on_off = *(uint8_t *)value;
@@ -144,12 +154,14 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
                 uint16_t enh_hue = *(uint16_t *)value;
                 state[seg].hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
                 state[seg].color_mode = 0;
-                transition_start(&state[seg].hue_trans, state[seg].hue, 0);  /* Instant - hue wraparound disabled */
+                /* Smooth hue transition with shortest-arc calculation */
+                start_hue_transition(&state[seg].hue_trans, state[seg].hue, led_renderer_get_global_transition_ms());
                 break;
             }
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID:
                 state[seg].saturation = *(uint8_t *)value;
-                transition_start(&state[seg].sat_trans, state[seg].saturation, 0);  /* Instant saturation change */
+                /* Smooth saturation transition */
+                transition_start(&state[seg].sat_trans, state[seg].saturation, led_renderer_get_global_transition_ms());
                 break;
             case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID:
                 state[seg].color_temp = *(uint16_t *)value;

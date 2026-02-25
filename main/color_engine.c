@@ -16,12 +16,13 @@
 
 void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    /* Handle wraparound: negative values (wrapped as large uint16_t) */
-    int16_t h_signed = (int16_t)h;
-    if (h > 360) {
-        /* Wrapped negative (e.g., -60 = 65476 as uint16_t) */
+    /* Handle wraparound from shortest-arc transitions */
+    if (h > 32768) {
+        /* Large value = wrapped negative (e.g., -60 = 65476 as uint16_t) */
+        int16_t h_signed = (int16_t)h;
         h = (uint16_t)((h_signed % 360) + 360);
     } else {
+        /* Small overshoot (e.g., 370) or normal range - just modulo */
         h %= 360;
     }
     if (s == 0) { *r = *g = *b = v; return; }
