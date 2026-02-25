@@ -12,7 +12,7 @@ A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home A
 - **Zigbee Router** — extends your Zigbee mesh (mains-powered)
 - **Home Assistant integration** — via Zigbee2MQTT external converter
 - **Serial CLI** — configure strip counts, segment geometry, and device settings
-- **OTA-ready** (planned Phase 5)
+- **Over-the-air (OTA) firmware updates** — automated via GitHub releases
 
 ## Hardware Requirements
 
