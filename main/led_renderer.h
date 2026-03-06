@@ -79,6 +79,18 @@ void update_leds(void);
 void restore_leds_cb(uint8_t param);
 
 /**
+ * @brief Recalculate per-strip power scale factors from current config
+ *
+ * Called after strip type or max_current changes. Computes a 0-255 brightness
+ * multiplier for each strip using worst-case current draw:
+ *   SK6812: 80 mA/LED (4 channels × 20 mA)
+ *   WS2812B: 60 mA/LED (3 channels × 20 mA)
+ * Scale = min(255, max_current * 255 / (count * per_led_mA))
+ * If max_current == 0, scale = 255 (unlimited).
+ */
+void led_renderer_recalc_power_scale(void);
+
+/**
  * @brief Start 200Hz LED render/poll loop
  *
  * Starts continuous 5ms scheduler alarm for segment polling and LED rendering.

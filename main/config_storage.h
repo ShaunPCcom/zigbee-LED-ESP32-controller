@@ -33,6 +33,30 @@ esp_err_t config_storage_save_strip_count(uint8_t strip, uint16_t count);
 esp_err_t config_storage_load_strip_count(uint8_t strip, uint16_t *count);
 
 /**
+ * @brief Save LED strip type for a specific strip (0 or 1) to NVS
+ * @param type  0=SK6812, 1=WS2812B
+ */
+esp_err_t config_storage_save_strip_type(uint8_t strip, uint8_t type);
+
+/**
+ * @brief Load LED strip type for a specific strip (0 or 1) from NVS
+ * @return ESP_OK with populated type, or ESP_ERR_NOT_FOUND if not set
+ */
+esp_err_t config_storage_load_strip_type(uint8_t strip, uint8_t *type);
+
+/**
+ * @brief Save max current (mA) for a specific strip (0 or 1) to NVS
+ * @param ma  Max current in mA, 0 = unlimited
+ */
+esp_err_t config_storage_save_strip_max_current(uint8_t strip, uint16_t ma);
+
+/**
+ * @brief Load max current (mA) for a specific strip (0 or 1) from NVS
+ * @return ESP_OK with populated ma, or ESP_ERR_NOT_FOUND if not set
+ */
+esp_err_t config_storage_load_strip_max_current(uint8_t strip, uint16_t *ma);
+
+/**
  * @brief Save global transition duration to NVS
  */
 esp_err_t config_storage_save_global_transition_ms(uint16_t ms);

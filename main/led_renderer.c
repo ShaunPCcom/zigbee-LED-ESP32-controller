@@ -16,6 +16,12 @@
 
 static const char *TAG = "led_renderer";
 
+/* Per-strip power scale: 0-255, applied as brightness multiplier */
+static uint8_t s_power_scale[LED_DRIVER_MAX_STRIPS] = {255, 255};
+
+/* Globals set by main.cpp after NVS load */
+extern uint16_t g_strip_max_current[2];
+
 /* ================================================================== */
 /*  Configuration Save Timer                                          */
 /* ================================================================== */
@@ -122,6 +128,30 @@ void schedule_zcl_sync(void)
 }
 
 /* ================================================================== */
+/*  Power Limiting                                                    */
+/* ================================================================== */
+
+void led_renderer_recalc_power_scale(void)
+{
+    for (int i = 0; i < LED_DRIVER_MAX_STRIPS; i++) {
+        uint16_t count      = led_driver_get_count(i);
+        led_strip_type_t t  = led_driver_get_type(i);
+        uint16_t max_cur    = g_strip_max_current[i];
+        uint16_t per_led_ma = (t == LED_STRIP_TYPE_WS2812B) ? 60 : 80;
+
+        if (max_cur == 0 || count == 0) {
+            s_power_scale[i] = 255;
+        } else {
+            uint32_t total_ma = (uint32_t)count * per_led_ma;
+            uint32_t scale = ((uint32_t)max_cur * 255) / total_ma;
+            s_power_scale[i] = (scale >= 255) ? 255 : (uint8_t)scale;
+        }
+        ESP_LOGI(TAG, "Strip%d power scale: %u/255 (max=%umA, count=%u, %umA/LED)",
+                 i, s_power_scale[i], max_cur, count, per_led_ma);
+    }
+}
+
+/* ================================================================== */
 /*  LED Rendering                                                     */
 /* ================================================================== */
 
@@ -140,6 +170,8 @@ void update_leds(void)
 
         uint8_t r = 0, g = 0, b = 0, w = 0;
 
+        uint8_t strip = geom[n].strip_id;
+
         if (state[n].on) {
             /* Read interpolated values from transition engine */
             uint8_t  level = (uint8_t)transition_get_value(&state[n].level_trans);
@@ -147,17 +179,33 @@ void update_leds(void)
             uint8_t  sat   = (uint8_t)transition_get_value(&state[n].sat_trans);
             uint16_t ct    = transition_get_value(&state[n].ct_trans);
 
+            /* Apply power scale (worst-case brightness limiting) */
+            uint8_t sc = s_power_scale[strip];
+            if (sc < 255) {
+                level = (uint8_t)(((uint16_t)level * sc) / 255);
+            }
+
             if (state[n].color_mode == 2) {
-                /* CT mode: drive White channel with brightness */
-                w = level;
+                if (led_driver_get_type(strip) == LED_STRIP_TYPE_WS2812B) {
+                    /* WS2812B: approximate warm white via desaturated orange.
+                     * CT range: 153 mir (6500K, cool) to 370 mir (2700K, warm).
+                     * Cool end -> sat=0 (pure white). Warm end -> sat~140 (~55%, amber tint).
+                     * Hue fixed at 30° (orange/amber). Smooth, perceptually convincing. */
+                    uint16_t ct_cool = 153, ct_warm = 370;
+                    uint16_t ct_clamped = (ct < ct_cool) ? ct_cool : (ct > ct_warm) ? ct_warm : ct;
+                    uint8_t t   = (uint8_t)(((uint32_t)(ct_clamped - ct_cool) * 255) / (ct_warm - ct_cool));
+                    uint8_t ww_sat = (uint8_t)(((uint32_t)t * 140) / 255);
+                    hsv_to_rgb(30, ww_sat, level, &r, &g, &b);
+                } else {
+                    /* SK6812: drive White channel with brightness */
+                    w = level;
+                }
             } else {
                 /* Enhanced Hue mode: convert HSV to RGB */
                 hsv_to_rgb(hue, sat, level, &r, &g, &b);
             }
-            (void)ct;  /* ct used in CT mode via level, kept for future use */
         }
 
-        uint8_t strip = geom[n].strip_id;
         uint16_t strip_len = led_driver_get_count(strip);
         uint16_t end = geom[n].start + geom[n].count;
         if (end > strip_len) end = strip_len;

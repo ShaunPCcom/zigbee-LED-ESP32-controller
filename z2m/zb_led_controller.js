@@ -42,14 +42,19 @@ const CLUSTER_PRESET_CONFIG  = 0xFC02;
 const MAX_SEGMENTS = 8;
 const MAX_PRESETS = 8;
 
-// Device config attributes: led_count (compat alias), strip1_count, strip2_count, global_transition_ms
+// Device config attributes: led_count (compat alias), strip1_count, strip2_count, global_transition_ms,
+//   strip1_type, strip2_type (0=SK6812, 1=WS2812B), strip1_max_current, strip2_max_current (mA)
 const ledCtrlConfigCluster = {
     ID: CLUSTER_DEVICE_CONFIG,
     attributes: {
-        ledCount:            {ID: 0x0000, type: ZCL_UINT16, write: true},
-        strip1Count:         {ID: 0x0001, type: ZCL_UINT16, write: true},
-        strip2Count:         {ID: 0x0002, type: ZCL_UINT16, write: true},
-        globalTransitionMs:  {ID: 0x0003, type: ZCL_UINT16, write: true},
+        ledCount:             {ID: 0x0000, type: ZCL_UINT16, write: true},
+        strip1Count:          {ID: 0x0001, type: ZCL_UINT16, write: true},
+        strip2Count:          {ID: 0x0002, type: ZCL_UINT16, write: true},
+        globalTransitionMs:   {ID: 0x0003, type: ZCL_UINT16, write: true},
+        strip1Type:           {ID: 0x0004, type: ZCL_UINT8,  write: true},
+        strip2Type:           {ID: 0x0005, type: ZCL_UINT8,  write: true},
+        strip1MaxCurrent:     {ID: 0x0006, type: ZCL_UINT16, write: true},
+        strip2MaxCurrent:     {ID: 0x0007, type: ZCL_UINT16, write: true},
     },
     commands: {},
     commandsResponse: {},
@@ -114,10 +119,15 @@ const fzLocal = {
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg, publish, options, meta) => {
             const result = {};
-            if (msg.data.ledCount           !== undefined) result.led_count            = msg.data.ledCount;
-            if (msg.data.strip1Count        !== undefined) result.strip1_count         = msg.data.strip1Count;
-            if (msg.data.strip2Count        !== undefined) result.strip2_count         = msg.data.strip2Count;
-            if (msg.data.globalTransitionMs !== undefined) result.global_transition_ms = msg.data.globalTransitionMs;
+            const typeNames = ['SK6812', 'WS2812B'];
+            if (msg.data.ledCount            !== undefined) result.led_count             = msg.data.ledCount;
+            if (msg.data.strip1Count         !== undefined) result.strip1_count          = msg.data.strip1Count;
+            if (msg.data.strip2Count         !== undefined) result.strip2_count          = msg.data.strip2Count;
+            if (msg.data.globalTransitionMs  !== undefined) result.global_transition_ms  = msg.data.globalTransitionMs;
+            if (msg.data.strip1Type          !== undefined) result.strip1_type           = typeNames[msg.data.strip1Type] || 'SK6812';
+            if (msg.data.strip2Type          !== undefined) result.strip2_type           = typeNames[msg.data.strip2Type] || 'SK6812';
+            if (msg.data.strip1MaxCurrent    !== undefined) result.strip1_max_current    = msg.data.strip1MaxCurrent;
+            if (msg.data.strip2MaxCurrent    !== undefined) result.strip2_max_current    = msg.data.strip2MaxCurrent;
             return result;
         },
     },
@@ -164,24 +174,41 @@ const fzLocal = {
 // ---- toZigbee ----
 const tzLocal = {
     strip_counts: {
-        key: ['strip1_count', 'strip2_count', 'global_transition_ms'],
+        key: ['strip1_count', 'strip2_count', 'global_transition_ms',
+              'strip1_type', 'strip2_type', 'strip1_max_current', 'strip2_max_current'],
         convertSet: async (entity, key, value, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
+            const typeValues = {SK6812: 0, WS2812B: 1};
             if (key === 'strip1_count') {
                 await ep.write('ledCtrlConfig', {strip1Count: value});
             } else if (key === 'strip2_count') {
                 await ep.write('ledCtrlConfig', {strip2Count: value});
             } else if (key === 'global_transition_ms') {
                 await ep.write('ledCtrlConfig', {globalTransitionMs: value});
+            } else if (key === 'strip1_type') {
+                const v = typeValues[value];
+                if (v !== undefined) await ep.write('ledCtrlConfig', {strip1Type: v});
+            } else if (key === 'strip2_type') {
+                const v = typeValues[value];
+                if (v !== undefined) await ep.write('ledCtrlConfig', {strip2Type: v});
+            } else if (key === 'strip1_max_current') {
+                await ep.write('ledCtrlConfig', {strip1MaxCurrent: value});
+            } else if (key === 'strip2_max_current') {
+                await ep.write('ledCtrlConfig', {strip2MaxCurrent: value});
             }
             return {state: {[key]: value}};
         },
         convertGet: async (entity, key, meta) => {
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
-            const attrMap = {strip1_count: 'strip1Count', strip2_count: 'strip2Count', global_transition_ms: 'globalTransitionMs'};
-            await ep.read('ledCtrlConfig', [attrMap[key]]);
+            const attrMap = {
+                strip1_count: 'strip1Count', strip2_count: 'strip2Count',
+                global_transition_ms: 'globalTransitionMs',
+                strip1_type: 'strip1Type', strip2_type: 'strip2Type',
+                strip1_max_current: 'strip1MaxCurrent', strip2_max_current: 'strip2MaxCurrent',
+            };
+            if (attrMap[key]) await ep.read('ledCtrlConfig', [attrMap[key]]);
         },
     },
     segments: {
@@ -392,6 +419,18 @@ const definition = {
         numericExpose('global_transition_ms', 'Global transition time', ACCESS_ALL,
             'Default transition duration in milliseconds for color and brightness changes',
             {value_min: 0, value_max: 65535, value_step: 100, unit: 'ms'}),
+        enumExpose('strip1_type', 'Strip 1 type', ACCESS_ALL,
+            'LED type for strip 1 (SK6812=RGBW, WS2812B=RGB). Reboot required after change.',
+            ['SK6812', 'WS2812B']),
+        enumExpose('strip2_type', 'Strip 2 type', ACCESS_ALL,
+            'LED type for strip 2 (SK6812=RGBW, WS2812B=RGB). Reboot required after change.',
+            ['SK6812', 'WS2812B']),
+        numericExpose('strip1_max_current', 'Strip 1 max current', ACCESS_ALL,
+            'Maximum current for strip 1 in mA (0 = unlimited). Applied immediately.',
+            {value_min: 0, value_max: 65535, value_step: 100, unit: 'mA'}),
+        numericExpose('strip2_max_current', 'Strip 2 max current', ACCESS_ALL,
+            'Maximum current for strip 2 in mA (0 = unlimited). Applied immediately.',
+            {value_min: 0, value_max: 65535, value_step: 100, unit: 'mA'}),
         ...segExposes,
         ...presetExposes,
     ],
@@ -417,7 +456,10 @@ const definition = {
     configure: async (device, coordinatorEndpoint, logger) => {
         registerCustomClusters(device);
         const ep1 = device.getEndpoint(1);
-        await ep1.read('ledCtrlConfig', ['strip1Count', 'strip2Count']);
+        await ep1.read('ledCtrlConfig', [
+            'strip1Count', 'strip2Count', 'globalTransitionMs',
+            'strip1Type', 'strip2Type', 'strip1MaxCurrent', 'strip2MaxCurrent',
+        ]);
 
         // Read all segment geometry so Z2M state reflects device NVS on re-interview
         const segGeomAttrs = [];

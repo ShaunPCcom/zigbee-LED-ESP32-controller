@@ -29,29 +29,33 @@
 static const char *TAG = "led_cli";
 
 extern uint16_t g_strip_count[2];
+extern uint8_t  g_strip_type[2];
+extern uint16_t g_strip_max_current[2];
 
 static void print_help(void)
 {
     printf(
         "\nLED Controller CLI commands:\n"
         "  led help\n"
-        "  led count <strip> <n>      (strip=1|2, n=1-500, saves to NVS, reboot to apply)\n"
-        "  led config                 (show current configuration)\n"
-        "  led seg                    (show all segments)\n"
-        "  led seg <1-8>              (show one segment)\n"
-        "  led seg <1-8> start <n>    (set start LED index)\n"
-        "  led seg <1-8> count <n>    (set LED count, 0=disable)\n"
-        "  led seg <1-8> strip <n>    (set physical strip, 1 or 2)\n"
-        "  led preset                 (list all preset slots)\n"
-        "  led preset save <slot> [name]  (save current state to slot 0-7)\n"
-        "  led preset apply <slot>    (recall preset from slot 0-7)\n"
-        "  led preset delete <slot>   (delete preset from slot 0-7)\n"
-        "  led transition             (show current global transition time)\n"
-        "  led transition <ms>        (set global transition time in ms, 0-65535)\n"
-        "  led nvs                    (NVS health check)\n"
-        "  led reboot                 (restart device)\n"
-        "  led repair                 (Zigbee network reset / re-pair)\n"
-        "  led factory-reset          (FULL reset: erase Zigbee + NVS config)\n\n"
+        "  led count <strip> <n>           (strip=1|2, n=1-500, saves to NVS, reboot to apply)\n"
+        "  led type <strip> <sk6812|ws2812b>  (set strip LED type, saves to NVS, reboot to apply)\n"
+        "  led maxcurrent <strip> <mA>     (set strip max current mA, 0=unlimited, applies now)\n"
+        "  led config                      (show current configuration)\n"
+        "  led seg                         (show all segments)\n"
+        "  led seg <1-8>                   (show one segment)\n"
+        "  led seg <1-8> start <n>         (set start LED index)\n"
+        "  led seg <1-8> count <n>         (set LED count, 0=disable)\n"
+        "  led seg <1-8> strip <n>         (set physical strip, 1 or 2)\n"
+        "  led preset                      (list all preset slots)\n"
+        "  led preset save <slot> [name]   (save current state to slot 0-7)\n"
+        "  led preset apply <slot>         (recall preset from slot 0-7)\n"
+        "  led preset delete <slot>        (delete preset from slot 0-7)\n"
+        "  led transition                  (show current global transition time)\n"
+        "  led transition <ms>             (set global transition time in ms, 0-65535)\n"
+        "  led nvs                         (NVS health check)\n"
+        "  led reboot                      (restart device)\n"
+        "  led repair                      (Zigbee network reset / re-pair)\n"
+        "  led factory-reset               (FULL reset: erase Zigbee + NVS config)\n\n"
     );
 }
 
@@ -71,9 +75,16 @@ static void print_segments(int which)
 
 static void print_config(void)
 {
-    printf("config: strip1=%u@GPIO%d strip2=%u@GPIO%d\n",
-           g_strip_count[0], LED_STRIP_1_GPIO,
-           g_strip_count[1], LED_STRIP_2_GPIO);
+    static const char *type_names[] = {"SK6812", "WS2812B"};
+    for (int i = 0; i < 2; i++) {
+        uint8_t t = g_strip_type[i] < 2 ? g_strip_type[i] : 0;
+        uint16_t mc = g_strip_max_current[i];
+        printf("strip%d: count=%u GPIO%d type=%s max_current=%u%s\n",
+               i + 1, g_strip_count[i],
+               (i == 0) ? LED_STRIP_1_GPIO : LED_STRIP_2_GPIO,
+               type_names[t],
+               mc, (mc == 0) ? " (unlimited)" : " mA");
+    }
 }
 
 static void cli_task(void *arg)
@@ -174,6 +185,70 @@ static void cli_task(void *arg)
                     printf("strip%d count=%d saved (reboot to apply)\n", strip, cnt);
                 } else {
                     printf("error saving strip count: %s\n", esp_err_to_name(err));
+                }
+                continue;
+            }
+
+            if (strcmp(cmd, "type") == 0) {
+                char *s = strtok(NULL, " \t\r\n");
+                char *v = strtok(NULL, " \t\r\n");
+                if (!s || !v) {
+                    printf("usage: led type <strip> <sk6812|ws2812b>  (strip=1|2)\n");
+                    continue;
+                }
+                int strip = atoi(s);
+                if (strip < 1 || strip > 2) {
+                    printf("error: strip must be 1 or 2\n");
+                    continue;
+                }
+                uint8_t type;
+                if (strcmp(v, "sk6812") == 0 || strcmp(v, "SK6812") == 0) {
+                    type = 0;
+                } else if (strcmp(v, "ws2812b") == 0 || strcmp(v, "WS2812B") == 0) {
+                    type = 1;
+                } else {
+                    printf("error: type must be sk6812 or ws2812b\n");
+                    continue;
+                }
+                g_strip_type[strip - 1] = type;
+                esp_err_t err = config_storage_save_strip_type((uint8_t)(strip - 1), type);
+                if (err == ESP_OK) {
+                    printf("strip%d type=%s saved (reboot to apply)\n",
+                           strip, type == 1 ? "WS2812B" : "SK6812");
+                } else {
+                    printf("error saving strip type: %s\n", esp_err_to_name(err));
+                }
+                continue;
+            }
+
+            if (strcmp(cmd, "maxcurrent") == 0) {
+                char *s = strtok(NULL, " \t\r\n");
+                char *v = strtok(NULL, " \t\r\n");
+                if (!s || !v) {
+                    printf("usage: led maxcurrent <strip> <mA>  (strip=1|2, mA=0-65535, 0=unlimited)\n");
+                    continue;
+                }
+                int strip = atoi(s);
+                int ma = atoi(v);
+                if (strip < 1 || strip > 2) {
+                    printf("error: strip must be 1 or 2\n");
+                    continue;
+                }
+                if (ma < 0 || ma > 65535) {
+                    printf("error: mA must be 0-65535\n");
+                    continue;
+                }
+                g_strip_max_current[strip - 1] = (uint16_t)ma;
+                esp_err_t err = config_storage_save_strip_max_current((uint8_t)(strip - 1), (uint16_t)ma);
+                if (err == ESP_OK) {
+                    led_renderer_recalc_power_scale();
+                    if (ma == 0) {
+                        printf("strip%d max_current=unlimited\n", strip);
+                    } else {
+                        printf("strip%d max_current=%d mA (applied)\n", strip, ma);
+                    }
+                } else {
+                    printf("error saving max current: %s\n", esp_err_to_name(err));
                 }
                 continue;
             }

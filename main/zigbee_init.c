@@ -23,11 +23,17 @@
 #include <string.h>
 
 extern uint16_t g_strip_count[2];
+extern uint8_t  g_strip_type[2];
+extern uint16_t g_strip_max_current[2];
 
 static const char *TAG = "zb_init";
 
 /* Static buffer for device config cluster attributes */
 static uint16_t s_global_transition_ms_attr = 1000;  /* default 1000ms */
+static uint8_t  s_strip1_type_attr = 0;               /* 0=SK6812 */
+static uint8_t  s_strip2_type_attr = 0;               /* 0=SK6812 */
+static uint16_t s_strip1_max_current_attr = 0;        /* 0=unlimited */
+static uint16_t s_strip2_max_current_attr = 0;        /* 0=unlimited */
 
 /* Static buffers for preset cluster attributes */
 static uint8_t s_preset_count_attr = 0;
@@ -133,6 +139,23 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s1);
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_GLOBAL_TRANSITION_MS,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_global_transition_ms_attr);
+
+        /* Strip type (U8, 0=SK6812, 1=WS2812B) — requires reboot to apply */
+        s_strip1_type_attr = g_strip_type[0];
+        s_strip2_type_attr = g_strip_type[1];
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP1_TYPE,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip1_type_attr);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP2_TYPE,
+            ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip2_type_attr);
+
+        /* Max current (U16, mA, 0=unlimited) — applies immediately */
+        s_strip1_max_current_attr = g_strip_max_current[0];
+        s_strip2_max_current_attr = g_strip_max_current[1];
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP1_MAX_CURRENT,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip1_max_current_attr);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP2_MAX_CURRENT,
+            ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip2_max_current_attr);
+
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, dev_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
         /* 0xFC01: Segment geometry — start + count + strip for each segment */

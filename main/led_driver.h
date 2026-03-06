@@ -24,12 +24,23 @@ extern "C" {
 #define LED_DRIVER_MAX_STRIPS  2
 
 /**
+ * @brief LED strip type
+ */
+typedef enum {
+    LED_STRIP_TYPE_SK6812  = 0,  /**< SK6812 RGBW (4 bytes/LED, GRBW order) */
+    LED_STRIP_TYPE_WS2812B = 1,  /**< WS2812B RGB  (3 bytes/LED, GRB order)  */
+} led_strip_type_t;
+
+/**
  * @brief Initialize LED driver and SPI bus
  *
  * @param count0  LED count for strip 0 (GPIO4), 0 = disabled
  * @param count1  LED count for strip 1 (GPIO5), 0 = disabled
+ * @param type0   Strip 0 LED type (SK6812 or WS2812B)
+ * @param type1   Strip 1 LED type
  */
-esp_err_t led_driver_init(uint16_t count0, uint16_t count1);
+esp_err_t led_driver_init(uint16_t count0, uint16_t count1,
+                           led_strip_type_t type0, led_strip_type_t type1);
 
 /**
  * @brief Set an RGBW pixel in the buffer for a specific strip
@@ -51,6 +62,11 @@ esp_err_t led_driver_refresh(void);
  * @brief Get the LED count for a specific strip
  */
 uint16_t led_driver_get_count(uint8_t strip);
+
+/**
+ * @brief Get the LED type for a specific strip
+ */
+led_strip_type_t led_driver_get_type(uint8_t strip);
 
 #ifdef __cplusplus
 }

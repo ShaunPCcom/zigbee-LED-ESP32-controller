@@ -45,6 +45,8 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
     /* Custom cluster: device config (EP1 only) */
     if (cluster == ZB_CLUSTER_DEVICE_CONFIG) {
+        extern void reboot_cb(uint8_t param);  /* From zigbee_signal_handlers.c */
+
         if (attr_id == ZB_ATTR_GLOBAL_TRANSITION_MS) {
             uint16_t ms = *(uint16_t *)value;
             led_renderer_set_global_transition_ms(ms);
@@ -52,12 +54,42 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             ESP_LOGI(TAG, "global_transition_ms -> %u ms", ms);
             return ESP_OK;
         }
+
+        /* Strip type (0=SK6812, 1=WS2812B) — requires reboot */
+        if (attr_id == ZB_ATTR_STRIP1_TYPE || attr_id == ZB_ATTR_STRIP2_TYPE) {
+            uint8_t type = *(uint8_t *)value;
+            if (type > 1) {
+                ESP_LOGW(TAG, "Invalid strip type %u (0=SK6812, 1=WS2812B)", type);
+                return ESP_OK;
+            }
+            uint8_t strip = (attr_id == ZB_ATTR_STRIP2_TYPE) ? 1 : 0;
+            extern uint8_t g_strip_type[2];
+            g_strip_type[strip] = type;
+            config_storage_save_strip_type(strip, type);
+            ESP_LOGI(TAG, "Strip%d type -> %s (saving, reboot in 1s)",
+                     strip, type == 1 ? "WS2812B" : "SK6812");
+            esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
+            return ESP_OK;
+        }
+
+        /* Max current (mA, 0=unlimited) — applies immediately */
+        if (attr_id == ZB_ATTR_STRIP1_MAX_CURRENT || attr_id == ZB_ATTR_STRIP2_MAX_CURRENT) {
+            uint16_t ma = *(uint16_t *)value;
+            uint8_t strip = (attr_id == ZB_ATTR_STRIP2_MAX_CURRENT) ? 1 : 0;
+            extern uint16_t g_strip_max_current[2];
+            g_strip_max_current[strip] = ma;
+            config_storage_save_strip_max_current(strip, ma);
+            led_renderer_recalc_power_scale();
+            ESP_LOGI(TAG, "Strip%d max_current -> %u mA", strip, ma);
+            return ESP_OK;
+        }
+
+        /* Strip count (requires reboot) */
         uint16_t new_count = *(uint16_t *)value;
         if (new_count >= 1 && new_count <= 500) {
             uint8_t strip = (attr_id == ZB_ATTR_STRIP2_COUNT) ? 1 : 0;
             ESP_LOGI(TAG, "Strip%d count -> %u (saving, reboot in 1s)", strip, new_count);
             config_storage_save_strip_count(strip, new_count);
-            extern void reboot_cb(uint8_t param);  // From zigbee_signal_handlers.c
             esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
         }
         return ESP_OK;

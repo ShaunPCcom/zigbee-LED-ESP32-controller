@@ -28,12 +28,20 @@ extern "C" {
  *   0x0001: strip1_count         (U16, RW) — strip 0 LED count
  *   0x0002: strip2_count         (U16, RW) — strip 1 LED count
  *   0x0003: global_transition_ms (U16, RW) — default transition duration in ms
+ *   0x0004: strip1_type          (U8,  RW) — strip 0 LED type (0=SK6812, 1=WS2812B), reboot req
+ *   0x0005: strip2_type          (U8,  RW) — strip 1 LED type, reboot req
+ *   0x0006: strip1_max_current   (U16, RW) — strip 0 max current mA (0=unlimited)
+ *   0x0007: strip2_max_current   (U16, RW) — strip 1 max current mA (0=unlimited)
  */
 #define ZB_CLUSTER_DEVICE_CONFIG        0xFC00
 #define ZB_ATTR_LED_COUNT               0x0000
 #define ZB_ATTR_STRIP1_COUNT            0x0001
 #define ZB_ATTR_STRIP2_COUNT            0x0002
 #define ZB_ATTR_GLOBAL_TRANSITION_MS    0x0003
+#define ZB_ATTR_STRIP1_TYPE             0x0004
+#define ZB_ATTR_STRIP2_TYPE             0x0005
+#define ZB_ATTR_STRIP1_MAX_CURRENT      0x0006
+#define ZB_ATTR_STRIP2_MAX_CURRENT      0x0007
 
 /**
  * @brief Custom cluster 0xFC01: Segment geometry

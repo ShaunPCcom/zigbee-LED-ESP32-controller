@@ -25,15 +25,16 @@
 static const char *TAG = "led_driver";
 
 #define LED_SPI_CLOCK_HZ    2500000   /* 2.5 MHz -> 400 ns per SPI bit */
-#define BYTES_PER_LED       4         /* SK6812: GRBW */
-#define SPI_BYTES_PER_LED   12        /* 4 bytes * 3 SPI bytes per LED byte */
 #define RESET_BYTES         40        /* 40 * 8 * 400ns = 128 us > 80 us reset */
 
 typedef struct {
-    uint8_t  *pixel_buf;
-    uint8_t  *spi_buf;
-    uint16_t  count;
-    size_t    spi_len;
+    uint8_t          *pixel_buf;
+    uint8_t          *spi_buf;
+    uint16_t          count;
+    size_t            spi_len;
+    led_strip_type_t  type;
+    uint8_t           bytes_per_led;      /* 4 for SK6812, 3 for WS2812B */
+    uint8_t           spi_bytes_per_led;  /* bytes_per_led * 3 */
 } strip_data_t;
 
 static strip_data_t s_strips[LED_DRIVER_MAX_STRIPS];
@@ -65,7 +66,7 @@ static void encode_strip(uint8_t strip_id)
 
     const uint8_t *src = s->pixel_buf;
     uint8_t *dst = s->spi_buf;
-    size_t n = (size_t)s->count * BYTES_PER_LED;
+    size_t n = (size_t)s->count * s->bytes_per_led;
 
     for (size_t i = 0; i < n; i++) {
         dst[0] = s_lut[src[i]][0];
@@ -92,11 +93,13 @@ static void mosi_idle(int gpio_num)
 
 /* ---------- Public API ---------- */
 
-esp_err_t led_driver_init(uint16_t count0, uint16_t count1)
+esp_err_t led_driver_init(uint16_t count0, uint16_t count1,
+                           led_strip_type_t type0, led_strip_type_t type1)
 {
     build_lut();
 
     uint16_t counts[LED_DRIVER_MAX_STRIPS] = {count0, count1};
+    led_strip_type_t types[LED_DRIVER_MAX_STRIPS] = {type0, type1};
 
     spi_bus_config_t bus = {
         .mosi_io_num   = LED_STRIP_1_GPIO,
@@ -121,14 +124,18 @@ esp_err_t led_driver_init(uint16_t count0, uint16_t count1)
 
     for (int i = 0; i < LED_DRIVER_MAX_STRIPS; i++) {
         s_strips[i].count = counts[i];
+        s_strips[i].type  = types[i];
+        s_strips[i].bytes_per_led     = (types[i] == LED_STRIP_TYPE_WS2812B) ? 3 : 4;
+        s_strips[i].spi_bytes_per_led = s_strips[i].bytes_per_led * 3;
+
         if (counts[i] == 0) {
             gpio_set_direction(s_gpio[i], GPIO_MODE_OUTPUT);
             gpio_set_level(s_gpio[i], 0);
             continue;
         }
 
-        size_t pix_sz = (size_t)counts[i] * BYTES_PER_LED;
-        size_t spi_sz = (size_t)counts[i] * SPI_BYTES_PER_LED + RESET_BYTES;
+        size_t pix_sz = (size_t)counts[i] * s_strips[i].bytes_per_led;
+        size_t spi_sz = (size_t)counts[i] * s_strips[i].spi_bytes_per_led + RESET_BYTES;
         s_strips[i].spi_len = spi_sz;
 
         s_strips[i].pixel_buf = calloc(1, pix_sz);
@@ -139,8 +146,9 @@ esp_err_t led_driver_init(uint16_t count0, uint16_t count1)
         }
     }
 
-    ESP_LOGI(TAG, "LED driver ready: strip0=%u@GPIO%d strip1=%u@GPIO%d",
-             count0, LED_STRIP_1_GPIO, count1, LED_STRIP_2_GPIO);
+    ESP_LOGI(TAG, "LED driver ready: strip0=%u@GPIO%d(%s) strip1=%u@GPIO%d(%s)",
+             count0, LED_STRIP_1_GPIO, (type0 == LED_STRIP_TYPE_WS2812B) ? "WS2812B" : "SK6812",
+             count1, LED_STRIP_2_GPIO, (type1 == LED_STRIP_TYPE_WS2812B) ? "WS2812B" : "SK6812");
     return ESP_OK;
 }
 
@@ -151,11 +159,19 @@ esp_err_t led_driver_set_pixel(uint8_t strip, uint16_t idx,
     strip_data_t *s = &s_strips[strip];
     if (!s->pixel_buf || idx >= s->count) return ESP_ERR_INVALID_ARG;
 
-    uint8_t *p = s->pixel_buf + (size_t)idx * BYTES_PER_LED;
-    p[0] = g;
-    p[1] = r;
-    p[2] = b;
-    p[3] = w;
+    uint8_t *p = s->pixel_buf + (size_t)idx * s->bytes_per_led;
+    if (s->type == LED_STRIP_TYPE_WS2812B) {
+        /* WS2812B: GRB (3 bytes, no white channel) */
+        p[0] = g;
+        p[1] = r;
+        p[2] = b;
+    } else {
+        /* SK6812: GRBW (4 bytes) */
+        p[0] = g;
+        p[1] = r;
+        p[2] = b;
+        p[3] = w;
+    }
     return ESP_OK;
 }
 
@@ -164,7 +180,7 @@ esp_err_t led_driver_clear(uint8_t strip)
     if (strip >= LED_DRIVER_MAX_STRIPS) return ESP_ERR_INVALID_ARG;
     strip_data_t *s = &s_strips[strip];
     if (s->pixel_buf && s->count > 0) {
-        memset(s->pixel_buf, 0, (size_t)s->count * BYTES_PER_LED);
+        memset(s->pixel_buf, 0, (size_t)s->count * s->bytes_per_led);
     }
     return ESP_OK;
 }
@@ -195,4 +211,10 @@ uint16_t led_driver_get_count(uint8_t strip)
 {
     if (strip >= LED_DRIVER_MAX_STRIPS) return 0;
     return s_strips[strip].count;
+}
+
+led_strip_type_t led_driver_get_type(uint8_t strip)
+{
+    if (strip >= LED_DRIVER_MAX_STRIPS) return LED_STRIP_TYPE_SK6812;
+    return s_strips[strip].type;
 }

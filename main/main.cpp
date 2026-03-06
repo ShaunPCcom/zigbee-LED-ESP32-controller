@@ -36,7 +36,9 @@ static ButtonHandler *g_button = nullptr;
 
 /* Per-strip LED counts — loaded from NVS, used by LED driver and Zigbee init */
 extern "C" {
-    uint16_t g_strip_count[2] = {LED_STRIP_1_COUNT, LED_STRIP_2_COUNT};
+    uint16_t g_strip_count[2]       = {LED_STRIP_1_COUNT, LED_STRIP_2_COUNT};
+    uint8_t  g_strip_type[2]        = {0, 0};  /* 0=SK6812, 1=WS2812B */
+    uint16_t g_strip_max_current[2] = {0, 0};  /* mA, 0=unlimited */
 }
 
 extern "C" void app_main(void)
@@ -57,12 +59,22 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(config_storage_init());
 
-    /* Load per-strip counts from NVS */
-    uint16_t tmp;
+    /* Load per-strip counts, types, and max currents from NVS */
+    uint16_t tmp16;
+    uint8_t  tmp8;
     for (int i = 0; i < 2; i++) {
-        if (config_storage_load_strip_count(i, &tmp) == ESP_OK) {
-            g_strip_count[i] = tmp;
+        if (config_storage_load_strip_count(i, &tmp16) == ESP_OK) {
+            g_strip_count[i] = tmp16;
             ESP_LOGI(TAG, "Strip %d count from NVS: %u", i, g_strip_count[i]);
+        }
+        if (config_storage_load_strip_type(i, &tmp8) == ESP_OK) {
+            g_strip_type[i] = tmp8;
+            ESP_LOGI(TAG, "Strip %d type from NVS: %s", i,
+                     g_strip_type[i] == 1 ? "WS2812B" : "SK6812");
+        }
+        if (config_storage_load_strip_max_current(i, &tmp16) == ESP_OK) {
+            g_strip_max_current[i] = tmp16;
+            ESP_LOGI(TAG, "Strip %d max_current from NVS: %u mA", i, g_strip_max_current[i]);
         }
     }
 
@@ -110,7 +122,9 @@ extern "C" void app_main(void)
     g_board_led->set_state(BoardLed::State::NOT_JOINED);
 
     /* Initialize LED driver (SPI, both strips) */
-    ret = led_driver_init(g_strip_count[0], g_strip_count[1]);
+    ret = led_driver_init(g_strip_count[0], g_strip_count[1],
+                          (led_strip_type_t)g_strip_type[0],
+                          (led_strip_type_t)g_strip_type[1]);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init LED driver: %s", esp_err_to_name(ret));
         return;
@@ -118,8 +132,9 @@ extern "C" void app_main(void)
     led_driver_clear(0);
     led_driver_clear(1);
     led_driver_refresh();
-    ESP_LOGI(TAG, "LED driver initialized (strip0=%u@GPIO%d strip1=%u@GPIO%d)",
-             g_strip_count[0], LED_STRIP_1_GPIO, g_strip_count[1], LED_STRIP_2_GPIO);
+
+    /* Calculate initial power scale from NVS-loaded config */
+    led_renderer_recalc_power_scale();
 
     /* Initialize and start Zigbee */
     ret = zigbee_init();

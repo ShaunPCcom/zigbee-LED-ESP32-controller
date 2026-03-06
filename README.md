@@ -1,23 +1,25 @@
 # ZB-H2 LED Controller
 
-A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home Assistant via Zigbee2MQTT. Supports up to two physical SK6812 RGBW LED strips divided into up to eight independent virtual segments, each exposed as a separate Extended Color Light in Home Assistant.
+A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home Assistant via Zigbee2MQTT. Supports up to two physical LED strips (SK6812 RGBW or WS2812B RGB, configurable per strip) divided into up to eight independent virtual segments, each exposed as a separate Extended Color Light in Home Assistant.
 
 ## Features
 
 - **Dual physical strip support** — two LED outputs via SPI2 time-multiplexing
+- **Per-strip LED type** — SK6812 RGBW or WS2812B RGB, configured independently per strip
+- **Per-strip power limiting** — configurable max current (mA) with automatic brightness scaling
 - **8 virtual segments** — independently controllable overlapping or non-overlapping regions
 - **Full color control** — RGB (HS/XY) and color temperature (CT/white) modes per segment
 - **Per-segment power-on behavior** — off, on, toggle, or restore previous state
 - **NVS persistence** — geometry, state, and configuration survive reboots
 - **Zigbee Router** — extends your Zigbee mesh (mains-powered)
 - **Home Assistant integration** — via Zigbee2MQTT external converter
-- **Serial CLI** — configure strip counts, segment geometry, and device settings
+- **Serial CLI** — configure strip counts, types, power limits, segment geometry, and device settings
 - **Over-the-air (OTA) firmware updates** — automated via GitHub releases
 
 ## Hardware Requirements
 
 - **MCU**: ESP32-H2-DevKitM-1 (or compatible ESP32-H2 board)
-- **LED strips**: SK6812 RGBW (WS2812B RGB also supported)
+- **LED strips**: SK6812 RGBW or WS2812B RGB (configured per strip via CLI or Z2M)
 - **Power**: Mains-powered (5V for LED strips, USB for dev board)
 
 ### GPIO Pinout
@@ -64,10 +66,15 @@ Each segment exposes brightness, RGB color (hue/saturation), color temperature (
 
 **0xFC00 — Device Configuration (EP1)**
 
-| Attribute | Description |
-|-----------|-------------|
-| `strip1_count` | LED count for physical strip 1 |
-| `strip2_count` | LED count for physical strip 2 (0 = disabled) |
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `strip1_count` | U16 | LED count for strip 1 (reboot required) |
+| `strip2_count` | U16 | LED count for strip 2, 0 = disabled (reboot required) |
+| `global_transition_ms` | U16 | Default transition duration in ms |
+| `strip1_type` | U8 | Strip 1 LED type: 0 = SK6812, 1 = WS2812B (reboot required) |
+| `strip2_type` | U8 | Strip 2 LED type: 0 = SK6812, 1 = WS2812B (reboot required) |
+| `strip1_max_current` | U16 | Strip 1 max current in mA, 0 = unlimited |
+| `strip2_max_current` | U16 | Strip 2 max current in mA, 0 = unlimited |
 
 **0xFC01 — Segment Geometry (EP1)**
 
@@ -78,6 +85,42 @@ Each of the 8 segments has three attributes:
 | `segN_start` | First LED index |
 | `segN_count` | Number of LEDs (0 = disabled) |
 | `segN_strip` | Physical strip assignment (1 or 2) |
+
+## Strip Configuration
+
+### LED Type Selection
+
+Each strip is configured independently as SK6812 (RGBW) or WS2812B (RGB). The type affects byte encoding on the wire and color temperature behaviour. **Requires reboot to apply.**
+
+```bash
+led type 1 ws2812b    # Set strip 1 to WS2812B (saves to NVS, reboot to apply)
+led type 2 sk6812     # Set strip 2 to SK6812
+```
+
+Or via Z2M: the **Strip 1 type** / **Strip 2 type** dropdown on the device page.
+
+### Color Temperature on WS2812B
+
+WS2812B strips have no physical white LED. When a segment assigned to a WS2812B strip is in CT (color temperature) mode:
+
+- **Cool white (6500K / 153 mireds)** — equal RGB, pure white
+- **Warm white (2700K / 370 mireds)** — desaturated orange (hue 30°, ~55% saturation), approximating incandescent warmth
+- **In between** — smooth linear interpolation of saturation
+
+This is an approximation. It won't match a true warm-white LED but gives a convincing warm feeling. SK6812 strips drive the dedicated white channel and are unaffected.
+
+Presets are portable across strip types — a saved "warm white" preset renders each strip's best approximation.
+
+### Power Limiting
+
+Set a maximum current per strip. The firmware scales brightness down so worst-case draw (all channels full) stays within the limit. Uses 80 mA/LED for SK6812 (4 × 20 mA) and 60 mA/LED for WS2812B (3 × 20 mA). Applies immediately without reboot.
+
+```bash
+led maxcurrent 1 5000    # Limit strip 1 to 5000 mA
+led maxcurrent 2 0       # Strip 2 unlimited (default)
+```
+
+Or via Z2M: the **Strip 1 max current** / **Strip 2 max current** numeric fields (mA, 0 = unlimited).
 
 ## Preset Management
 
@@ -260,8 +303,11 @@ Connect via serial monitor (`idf.py -p /dev/ttyACM0 monitor`). All commands are 
 | Command | Description |
 |---------|-------------|
 | `led help` | Show available commands |
-| `led config` | Show strip configuration |
-| `led count <strip> <n>` | Set LED count for strip 1 or 2 (reboot to apply) |
+| `led config` | Show strip configuration (count, type, max current per strip) |
+| `led count <strip> <n>` | Set LED count for strip 1 or 2, reboot to apply |
+| `led type <strip> <sk6812\|ws2812b>` | Set LED type for strip 1 or 2, reboot to apply |
+| `led maxcurrent <strip> <mA>` | Set max current for strip 1 or 2 in mA (0 = unlimited), applies immediately |
+| `led transition [ms]` | Show or set global transition time in ms (0 = instant) |
 | `led seg [1-8]` | Show segment geometry and state |
 | `led seg <n> start <val>` | Set segment start index |
 | `led seg <n> count <val>` | Set segment LED count (0 disables) |
