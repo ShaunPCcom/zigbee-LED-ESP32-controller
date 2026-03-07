@@ -23,7 +23,7 @@ extern "C" {
  * SINGLE SOURCE OF TRUTH - Update only these three values for new releases
  * ============================================================================ */
 #define FW_VERSION_MAJOR 1
-#define FW_VERSION_MINOR 3
+#define FW_VERSION_MINOR 4
 #define FW_VERSION_PATCH 0
 
 /* ============================================================================
@@ -64,7 +64,7 @@ extern "C" {
  *   - Double-digit minor (1.10.3): len = 1 + 2 + 1 + 2 = 6 chars
  *   - Verify length matches actual string after changing version numbers!
  *
- * For v1.3.0: "1.3.0" = 5 chars = 0x05
+ * For v1.4.0: "1.4.0" = 5 chars = 0x05
  */
 #define FIRMWARE_SW_BUILD_ID \
     "\x05" FW_STR(FW_VERSION_MAJOR) "." FW_STR(FW_VERSION_MINOR) "." FW_STR(FW_VERSION_PATCH)

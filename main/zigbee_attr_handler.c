@@ -145,6 +145,112 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
         return ESP_OK;
     }
 
+    /* EP9 "all segments" master — on/off, level, and CT writes propagate to all segments.
+     * HS color is handled by polling in led_render_cb (SDK delivers no callback for it). */
+    if (endpoint == ZB_ALL_EP) {
+        segment_light_t *state = segment_state_get();
+
+        if (cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+            if (attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+                bool new_on = *(bool *)value;
+                ESP_LOGI(TAG, "All segs on/off -> %s", new_on ? "ON" : "OFF");
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    bool was_on = state[i].on;
+                    state[i].on = new_on;
+                    if (new_on && !was_on) {
+                        transition_start(&state[i].level_trans, 0, 0);
+                        transition_start(&state[i].level_trans, state[i].level,
+                                         led_renderer_get_global_transition_ms());
+                    } else if (!new_on && was_on) {
+                        transition_start(&state[i].level_trans, 0,
+                                         led_renderer_get_global_transition_ms());
+                    }
+                }
+                update_leds();
+                schedule_save();
+            }
+        } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL) {
+            if (attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID) {
+                uint8_t new_level = *(uint8_t *)value;
+                ESP_LOGI(TAG, "All segs level -> %d", new_level);
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    state[i].level = new_level;
+                    transition_start(&state[i].level_trans, new_level,
+                                     led_renderer_get_global_transition_ms());
+                    /* Sync segment EP ZCL stores so the render loop level poll
+                     * doesn't revert the level back to the old value next tick. */
+                    uint8_t ep_i = (uint8_t)(ZB_SEGMENT_EP_BASE + i);
+                    esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                        ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &new_level, false);
+                }
+                update_leds();
+                schedule_save();
+            }
+        } else if (cluster == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL) {
+            switch (attr_id) {
+            case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID: {
+                uint16_t enh_hue = *(uint16_t *)value;
+                uint16_t hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    state[i].hue = hue;
+                    state[i].color_mode = 0;
+                    start_hue_transition(&state[i].hue_trans, hue,
+                                         led_renderer_get_global_transition_ms());
+                }
+                break;
+            }
+            case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID: {
+                uint8_t new_sat = *(uint8_t *)value;
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    state[i].saturation = new_sat;
+                    transition_start(&state[i].sat_trans, new_sat,
+                                     led_renderer_get_global_transition_ms());
+                }
+                break;
+            }
+            case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID: {
+                uint16_t new_ct = *(uint16_t *)value;
+                ESP_LOGI(TAG, "All segs CT -> %u mireds", new_ct);
+                uint8_t mode2 = 2;
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    state[i].color_temp = new_ct;
+                    state[i].color_mode = 2;
+                    transition_start(&state[i].ct_trans, new_ct,
+                                     led_renderer_get_global_transition_ms());
+                    /* Sync segment EP ZCL stores so the render loop's unconditional
+                     * color_mode read doesn't revert the mode back to HS next tick. */
+                    uint8_t ep_i = (uint8_t)(ZB_SEGMENT_EP_BASE + i);
+                    esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &mode2, false);
+                    esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &new_ct, false);
+                }
+                update_leds();
+                schedule_save();
+                break;
+            }
+            case ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID: {
+                uint8_t new_mode = *(uint8_t *)value;
+                for (int i = 0; i < MAX_SEGMENTS; i++) {
+                    state[i].color_mode = new_mode;
+                    uint8_t ep_i = (uint8_t)(ZB_SEGMENT_EP_BASE + i);
+                    esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                        ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &new_mode, false);
+                }
+                update_leds();
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        return ESP_OK;
+    }
+
     /* Segment light endpoints (EP1-EP8) */
     if (endpoint >= ZB_SEGMENT_EP_BASE && endpoint < ZB_SEGMENT_EP_BASE + MAX_SEGMENTS) {
         int seg = endpoint - ZB_SEGMENT_EP_BASE;

@@ -32,6 +32,7 @@ extern "C" {
 /* Segment configuration */
 #define MAX_SEGMENTS                   8    /* Maximum number of virtual segments */
 #define ZB_SEGMENT_EP_BASE             1    /* EP1 = segment 0, EP2 = segment 1, ... */
+#define ZB_ALL_EP   (ZB_SEGMENT_EP_BASE + MAX_SEGMENTS) /* EP9: "all segments" master control */
 
 /* Default power-on behavior (ZCL StartUpOnOff attr 0x4003)
  * 0x00 = off, 0x01 = on, 0x02 = toggle, 0xFF = previous */

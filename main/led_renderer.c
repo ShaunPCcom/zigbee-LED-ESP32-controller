@@ -19,6 +19,16 @@ static const char *TAG = "led_renderer";
 /* Per-strip power scale: 0-255, applied as brightness multiplier */
 static uint8_t s_power_scale[LED_DRIVER_MAX_STRIPS] = {255, 255};
 
+/* Last raw ZCL values seen by the render loop per segment + EP9 "all" master.
+ * Updated ONLY by the render loop — never by callbacks.
+ * This makes change detection immune to the SDK firing SET_ATTR_VALUE_CB_ID
+ * for one group endpoint but not the other, which would pre-set state[n].hue
+ * and cause the render loop to silently skip the update for that segment.
+ * Index [MAX_SEGMENTS] tracks EP9 ("all segments" master). */
+static uint16_t s_last_enh_hue[MAX_SEGMENTS + 1] = {0};
+static uint8_t  s_last_sat[MAX_SEGMENTS + 1]     = {0};
+static uint16_t s_last_ct[MAX_SEGMENTS + 1]      = {0};
+
 /* Globals set by main.cpp after NVS load */
 extern uint16_t g_strip_max_current[2];
 
@@ -250,6 +260,10 @@ static void led_render_cb(uint8_t param)
             }
         }
 
+        /* Always sync color_mode from ZCL — prevents mode getting stuck when
+         * a group command changes the mode without changing the value */
+        state[n].color_mode = zcl_mode;
+
         /* Poll Enhanced Hue in color mode (0), CT in white mode (2) */
         if (zcl_mode == 0) {
             /* Read enhanced hue (16-bit, 0-65535 maps to 0-360°) */
@@ -257,12 +271,10 @@ static void led_render_cb(uint8_t param)
                 ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID);
             if (attr_hue && attr_hue->data_p) {
                 uint16_t enh_hue = *(uint16_t *)attr_hue->data_p;
-                uint16_t new_hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
-                if (new_hue != state[n].hue) {
-                    state[n].hue = new_hue;
-                    state[n].color_mode = 0;
-                    /* Instant color change (no transition) - hue wraparound disabled */
-                    transition_start(&state[n].hue_trans, new_hue, 0);
+                if (enh_hue != s_last_enh_hue[n]) {
+                    s_last_enh_hue[n] = enh_hue;
+                    state[n].hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
+                    transition_start(&state[n].hue_trans, state[n].hue, 0);
                 }
             }
 
@@ -271,9 +283,9 @@ static void led_render_cb(uint8_t param)
                 ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID);
             if (attr_sat && attr_sat->data_p) {
                 uint8_t new_sat = *(uint8_t *)attr_sat->data_p;
-                if (new_sat != state[n].saturation) {
+                if (new_sat != s_last_sat[n]) {
+                    s_last_sat[n] = new_sat;
                     state[n].saturation = new_sat;
-                    /* Instant saturation change (no transition) */
                     transition_start(&state[n].sat_trans, new_sat, 0);
                 }
             }
@@ -283,10 +295,86 @@ static void led_render_cb(uint8_t param)
                 ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
             if (attr_ct && attr_ct->data_p) {
                 uint16_t new_ct = *(uint16_t *)attr_ct->data_p;
-                if (new_ct != state[n].color_temp) {
+                if (new_ct != s_last_ct[n]) {
+                    s_last_ct[n] = new_ct;
                     state[n].color_temp = new_ct;
-                    state[n].color_mode = 2;
                     transition_start(&state[n].ct_trans, new_ct, g_global_transition_ms);
+                }
+            }
+        }
+    }
+
+    /* EP9 "all segments" master — poll HS/CT and propagate to all active segments.
+     * On/off and level are handled via SET_ATTR_VALUE_CB_ID in zigbee_attr_handler.c. */
+    {
+        uint8_t ep_all = ZB_ALL_EP;
+
+        esp_zb_zcl_attr_t *attr_mode_all = esp_zb_zcl_get_attribute(ep_all,
+            ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID);
+        uint8_t zcl_mode_all = (attr_mode_all && attr_mode_all->data_p)
+                               ? *(uint8_t *)attr_mode_all->data_p : 0;
+
+        if (zcl_mode_all == 0) {
+            esp_zb_zcl_attr_t *attr_hue = esp_zb_zcl_get_attribute(ep_all,
+                ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ESP_ZB_ZCL_ATTR_COLOR_CONTROL_ENHANCED_CURRENT_HUE_ID);
+            if (attr_hue && attr_hue->data_p) {
+                uint16_t enh_hue = *(uint16_t *)attr_hue->data_p;
+                if (enh_hue != s_last_enh_hue[MAX_SEGMENTS]) {
+                    s_last_enh_hue[MAX_SEGMENTS] = enh_hue;
+                    uint16_t hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
+                    uint8_t mode0 = 0;
+                    for (int i = 0; i < MAX_SEGMENTS; i++) {
+                        state[i].hue = hue;
+                        state[i].color_mode = 0;
+                        transition_start(&state[i].hue_trans, hue, 0);
+                        /* Sync segment EP ZCL color_mode so render loop doesn't
+                         * revert back to CT on next tick. */
+                        uint8_t ep_i = (uint8_t)(ZB_SEGMENT_EP_BASE + i);
+                        esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &mode0, false);
+                    }
+                }
+            }
+
+            esp_zb_zcl_attr_t *attr_sat = esp_zb_zcl_get_attribute(ep_all,
+                ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID);
+            if (attr_sat && attr_sat->data_p) {
+                uint8_t new_sat = *(uint8_t *)attr_sat->data_p;
+                if (new_sat != s_last_sat[MAX_SEGMENTS]) {
+                    s_last_sat[MAX_SEGMENTS] = new_sat;
+                    for (int i = 0; i < MAX_SEGMENTS; i++) {
+                        state[i].saturation = new_sat;
+                        transition_start(&state[i].sat_trans, new_sat, 0);
+                    }
+                }
+            }
+        } else if (zcl_mode_all == 2) {
+            esp_zb_zcl_attr_t *attr_ct = esp_zb_zcl_get_attribute(ep_all,
+                ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
+            if (attr_ct && attr_ct->data_p) {
+                uint16_t new_ct = *(uint16_t *)attr_ct->data_p;
+                if (new_ct != s_last_ct[MAX_SEGMENTS]) {
+                    s_last_ct[MAX_SEGMENTS] = new_ct;
+                    uint8_t mode2 = 2;
+                    for (int i = 0; i < MAX_SEGMENTS; i++) {
+                        state[i].color_temp = new_ct;
+                        state[i].color_mode = 2;
+                        transition_start(&state[i].ct_trans, new_ct, g_global_transition_ms);
+                        /* Sync segment EP ZCL stores so the per-segment render loop
+                         * polling doesn't revert color_mode back to HS next tick. */
+                        uint8_t ep_i = (uint8_t)(ZB_SEGMENT_EP_BASE + i);
+                        esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &mode2, false);
+                        esp_zb_zcl_set_attribute_val(ep_i, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &new_ct, false);
+                    }
                 }
             }
         }

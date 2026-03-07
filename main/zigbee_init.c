@@ -107,8 +107,9 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         .on_off = ESP_ZB_ZCL_ON_OFF_ON_OFF_DEFAULT_VALUE,
     };
     esp_zb_attribute_list_t *on_off = esp_zb_on_off_cluster_create(&on_off_cfg);
-    /* StartUpOnOff: power-on behavior (0=off, 1=on, 2=toggle, DEFAULT_STARTUP_ON_OFF=previous) */
-    uint8_t startup_val = state[seg_idx].startup_on_off;
+    /* StartUpOnOff: power-on behavior (0=off, 1=on, 2=toggle, DEFAULT_STARTUP_ON_OFF=previous).
+     * EP9 ("all segments" master, seg_idx==MAX_SEGMENTS) has no segment state of its own. */
+    uint8_t startup_val = (seg_idx < MAX_SEGMENTS) ? state[seg_idx].startup_on_off : DEFAULT_STARTUP_ON_OFF;
     esp_zb_on_off_cluster_add_attr(on_off, ESP_ZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF, &startup_val);
 
     esp_zb_level_cluster_cfg_t level_cfg = {
@@ -118,9 +119,14 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 
     esp_zb_attribute_list_t *color = create_color_cluster();
 
+    esp_zb_attribute_list_t *groups = esp_zb_groups_cluster_create(NULL);
+    esp_zb_attribute_list_t *scenes = esp_zb_scenes_cluster_create(NULL);
+
     esp_zb_cluster_list_t *cl = esp_zb_zcl_cluster_list_create();
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cl, basic, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cl, identify, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_groups_cluster(cl, groups, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_scenes_cluster(cl, scenes, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_on_off_cluster(cl, on_off, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_level_cluster(cl, level, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_color_control_cluster(cl, color, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
@@ -262,10 +268,19 @@ static void zigbee_register_endpoints(void)
         ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_segment_clusters(i), ep_cfg));
     }
 
+    /* EP9: "all segments" master — unicast commands here propagate to all segments */
+    esp_zb_endpoint_config_t all_ep_cfg = {
+        .endpoint = ZB_ALL_EP,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = 0x0210,  /* Extended Color Light */
+        .app_device_version = 0,
+    };
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, create_segment_clusters(MAX_SEGMENTS), all_ep_cfg));
+
     ESP_ERROR_CHECK(esp_zb_device_register(ep_list));
 
-    ESP_LOGI(TAG, "Registered EP%d-%d as Extended Color Light (segments 1-%d)",
-             ZB_SEGMENT_EP_BASE, ZB_SEGMENT_EP_BASE + MAX_SEGMENTS - 1, MAX_SEGMENTS);
+    ESP_LOGI(TAG, "Registered EP%d-%d as segments, EP%d as all-segments master",
+             ZB_SEGMENT_EP_BASE, ZB_SEGMENT_EP_BASE + MAX_SEGMENTS - 1, ZB_ALL_EP);
 }
 
 /**

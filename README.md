@@ -8,6 +8,7 @@ A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home A
 - **Per-strip LED type** — SK6812 RGBW or WS2812B RGB, configured independently per strip
 - **Per-strip power limiting** — configurable max current (mA) with automatic brightness scaling
 - **8 virtual segments** — independently controllable overlapping or non-overlapping regions
+- **"All segments" master endpoint (EP9)** — single HS+CT light that controls all segments simultaneously
 - **Full color control** — RGB (HS/XY) and color temperature (CT/white) modes per segment
 - **Per-segment power-on behavior** — off, on, toggle, or restore previous state
 - **NVS persistence** — geometry, state, and configuration survive reboots
@@ -53,14 +54,15 @@ To pair: hold the boot button for 3 seconds (Zigbee network reset) while Z2M is 
 
 ## Device Endpoints
 
-The controller presents 8 endpoints (EP1–EP8), each an Extended Color Light:
+The controller presents 9 endpoints (EP1–EP9), each an Extended Color Light:
 
 | EP | Role |
 |----|------|
 | 1 | Segment 1 (default: full strip 1) + device config |
 | 2–8 | Segments 2–8 (disabled by default, count=0) |
+| 9 | **All segments master** — commands here propagate to all active segments simultaneously |
 
-Each segment exposes brightness, RGB color (hue/saturation), color temperature (white channel), on/off, and power-on behavior.
+Each segment (EP1–EP8) exposes brightness, RGB color (hue/saturation), color temperature (white channel), on/off, and power-on behavior. EP9 (`ZB_LED_CTRL_all`) provides the same controls but applies to all segments at once — useful as a master dimmer or unified color control without needing Zigbee groups.
 
 ### Custom Clusters
 

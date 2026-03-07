@@ -41,6 +41,7 @@ const CLUSTER_SEGMENT_CONFIG = 0xFC01;
 const CLUSTER_PRESET_CONFIG  = 0xFC02;
 const MAX_SEGMENTS = 8;
 const MAX_PRESETS = 8;
+const ZB_ALL_EP = MAX_SEGMENTS + 1;  /* EP9: "all segments" master */
 
 // Device config attributes: led_count (compat alias), strip1_count, strip2_count, global_transition_ms,
 //   strip1_type, strip2_type (0=SK6812, 1=WS2812B), strip1_max_current, strip2_max_current (mA)
@@ -383,7 +384,7 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
     );
 }
 
-// ---- 8 segment light extends (EP1-EP8) ----
+// ---- 8 segment light extends (EP1-EP8) + EP9 "all segments" master ----
 // Each segment is a Color Dimmable Light with enhanced hue (16-bit precision) and color_temp (CT=white)
 const segLightExtends = [];
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
@@ -395,6 +396,14 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
         effect: false,
     }));
 }
+// EP9: master "all segments" endpoint — commands here propagate to all segments simultaneously
+segLightExtends.push(light({
+    color: {modes: ['hs'], enhancedHue: true},
+    colorTemp: {range: [153, 370]},
+    endpointNames: ['all'],
+    powerOnBehavior: false,
+    effect: false,
+}));
 
 // ---- Device definition ----
 const definition = {
@@ -444,6 +453,7 @@ const definition = {
         for (let n = 1; n <= MAX_SEGMENTS; n++) {
             eps[`seg${n}`] = n;  // seg1=EP1, seg2=EP2, ...
         }
+        eps['all'] = ZB_ALL_EP;  // EP9: all-segments master
         return eps;
     },
 
