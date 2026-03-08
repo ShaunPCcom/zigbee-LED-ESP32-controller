@@ -7,6 +7,7 @@
 
 #include "zigbee_signal_handlers.h"
 #include "zigbee_init.h"
+#include "board_config.h"
 #include "led_renderer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -14,6 +15,9 @@
 #include "ha/esp_zigbee_ha_standard.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+
+#define DIAG_REPORT_MIN_INTERVAL   0    /* report immediately on change */
+#define DIAG_REPORT_MAX_INTERVAL   300  /* 5-minute keepalive */
 
 static const char *TAG = "zb_handler";
 
@@ -33,6 +37,33 @@ bool s_network_joined = false;
 /* ================================================================== */
 /*  Signal handler callbacks                                           */
 /* ================================================================== */
+
+static void configure_diag_report(uint16_t attr_id, uint16_t max_interval)
+{
+    esp_zb_zcl_reporting_info_t rpt = {0};
+    rpt.direction    = ESP_ZB_ZCL_REPORT_DIRECTION_SEND;
+    rpt.ep           = ZB_SEGMENT_EP_BASE;  /* EP1 */
+    rpt.cluster_id   = ZB_CLUSTER_DEVICE_CONFIG;
+    rpt.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
+    rpt.attr_id      = attr_id;
+    rpt.u.send_info.min_interval     = DIAG_REPORT_MIN_INTERVAL;
+    rpt.u.send_info.max_interval     = max_interval;
+    rpt.u.send_info.def_min_interval = DIAG_REPORT_MIN_INTERVAL;
+    rpt.u.send_info.def_max_interval = max_interval;
+    rpt.u.send_info.delta.u32        = 0;
+    rpt.dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
+    rpt.manuf_code     = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
+    esp_zb_zcl_update_reporting_info(&rpt);
+}
+
+static void configure_diag_reporting(void)
+{
+    configure_diag_report(ZB_ATTR_BOOT_COUNT,      DIAG_REPORT_MAX_INTERVAL);
+    configure_diag_report(ZB_ATTR_RESET_REASON,    DIAG_REPORT_MAX_INTERVAL);
+    configure_diag_report(ZB_ATTR_LAST_UPTIME_SEC, DIAG_REPORT_MAX_INTERVAL);
+    configure_diag_report(ZB_ATTR_MIN_FREE_HEAP,   DIAG_REPORT_MAX_INTERVAL);
+    ESP_LOGI(TAG, "Crash diag reporting configured");
+}
 
 static void steering_retry_cb(uint8_t param)
 {
@@ -77,6 +108,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 ESP_LOGI(TAG, "Device rebooted, already joined network");
                 board_led_set_state_joined();
                 s_network_joined = true;
+                configure_diag_reporting();
                 esp_zb_scheduler_alarm(restore_leds_cb, 0, 5500);
             }
         } else {
@@ -90,6 +122,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Successfully joined Zigbee network!");
             board_led_set_state_joined();
             s_network_joined = true;
+            configure_diag_reporting();
             esp_zb_scheduler_alarm(restore_leds_cb, 0, 5500);
         } else {
             ESP_LOGW(TAG, "Network steering failed (%s), retrying in 5s...", esp_err_to_name(status));

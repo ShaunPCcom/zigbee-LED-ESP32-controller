@@ -27,6 +27,9 @@
 /* C++ shared components */
 #include "board_led.hpp"
 #include "zigbee_button.hpp"
+extern "C" {
+#include "crash_diag.h"
+}
 
 static const char *TAG = "main";
 
@@ -56,6 +59,8 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "NVS initialized");
+
+    ESP_ERROR_CHECK(crash_diag_init());
 
     ESP_ERROR_CHECK(config_storage_init());
 
@@ -175,7 +180,9 @@ extern "C" void app_main(void)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        ESP_LOGI(TAG, "Uptime: %lld s", esp_timer_get_time() / 1000000);
+        uint32_t uptime = (uint32_t)(esp_timer_get_time() / 1000000LL);
+        ESP_LOGI(TAG, "Uptime: %lu s", (unsigned long)uptime);
+        crash_diag_update_uptime(uptime);
     }
 }
 

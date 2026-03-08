@@ -9,9 +9,11 @@
 #include "led_driver.h"
 #include "transition_engine.h"
 #include "config_storage.h"
+#include "zigbee_init.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_zigbee_core.h"
 
 static const char *TAG = "led_renderer";
@@ -378,6 +380,16 @@ static void led_render_cb(uint8_t param)
                 }
             }
         }
+    }
+
+    /* Update min_free_heap ZCL attr every ~60s (12000 * 5ms = 60s) */
+    static uint16_t s_heap_tick = 0;
+    if (++s_heap_tick >= 12000) {
+        s_heap_tick = 0;
+        uint32_t heap = esp_get_minimum_free_heap_size();
+        esp_zb_zcl_set_attribute_val(ZB_SEGMENT_EP_BASE,
+            ZB_CLUSTER_DEVICE_CONFIG, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ZB_ATTR_MIN_FREE_HEAP, &heap, false);
     }
 
     update_leds();

@@ -32,6 +32,10 @@ extern "C" {
  *   0x0005: strip2_type          (U8,  RW) — strip 1 LED type, reboot req
  *   0x0006: strip1_max_current   (U16, RW) — strip 0 max current mA (0=unlimited)
  *   0x0007: strip2_max_current   (U16, RW) — strip 1 max current mA (0=unlimited)
+ *   0x0030: boot_count           (U32, RO) — monotonic boot counter
+ *   0x0031: reset_reason         (U8,  RO) — last reset cause (see esp_reset_reason_t)
+ *   0x0032: last_uptime_sec      (U32, RO) — uptime in seconds before last reset
+ *   0x0033: min_free_heap        (U32, RO) — minimum free heap since boot (bytes)
  */
 #define ZB_CLUSTER_DEVICE_CONFIG        0xFC00
 #define ZB_ATTR_LED_COUNT               0x0000
@@ -42,6 +46,11 @@ extern "C" {
 #define ZB_ATTR_STRIP2_TYPE             0x0005
 #define ZB_ATTR_STRIP1_MAX_CURRENT      0x0006
 #define ZB_ATTR_STRIP2_MAX_CURRENT      0x0007
+#define ZB_ATTR_BOOT_COUNT              0x0030
+#define ZB_ATTR_RESET_REASON            0x0031
+#define ZB_ATTR_LAST_UPTIME_SEC         0x0032
+#define ZB_ATTR_MIN_FREE_HEAP           0x0033
+#define ZB_ATTR_RESTART                 0x00F0  /* U8, write-only (write any value to restart) */
 
 /**
  * @brief Custom cluster 0xFC01: Segment geometry

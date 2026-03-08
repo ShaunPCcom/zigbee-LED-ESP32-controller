@@ -28,6 +28,7 @@ const {light} = require('zigbee-herdsman-converters/lib/modernExtend');
 // ---- ZCL data type constants ----
 const ZCL_UINT8  = 0x20;
 const ZCL_UINT16 = 0x21;
+const ZCL_UINT32 = 0x23;
 const ZCL_CHAR_STRING = 0x42;
 
 // ---- Expose access flags ----
@@ -44,7 +45,8 @@ const MAX_PRESETS = 8;
 const ZB_ALL_EP = MAX_SEGMENTS + 1;  /* EP9: "all segments" master */
 
 // Device config attributes: led_count (compat alias), strip1_count, strip2_count, global_transition_ms,
-//   strip1_type, strip2_type (0=SK6812, 1=WS2812B), strip1_max_current, strip2_max_current (mA)
+//   strip1_type, strip2_type (0=SK6812, 1=WS2812B), strip1_max_current, strip2_max_current (mA),
+//   boot_count, reset_reason, last_uptime_sec, min_free_heap (crash diagnostics, read-only)
 const ledCtrlConfigCluster = {
     ID: CLUSTER_DEVICE_CONFIG,
     attributes: {
@@ -56,6 +58,11 @@ const ledCtrlConfigCluster = {
         strip2Type:           {ID: 0x0005, type: ZCL_UINT8,  write: true},
         strip1MaxCurrent:     {ID: 0x0006, type: ZCL_UINT16, write: true},
         strip2MaxCurrent:     {ID: 0x0007, type: ZCL_UINT16, write: true},
+        bootCount:            {ID: 0x0030, type: ZCL_UINT32},
+        resetReason:          {ID: 0x0031, type: ZCL_UINT8},
+        lastUptimeSec:        {ID: 0x0032, type: ZCL_UINT32},
+        minFreeHeap:          {ID: 0x0033, type: ZCL_UINT32},
+        restart:              {ID: 0x00F0, type: ZCL_UINT8, write: true},
     },
     commands: {},
     commandsResponse: {},
@@ -129,6 +136,10 @@ const fzLocal = {
             if (msg.data.strip2Type          !== undefined) result.strip2_type           = typeNames[msg.data.strip2Type] || 'SK6812';
             if (msg.data.strip1MaxCurrent    !== undefined) result.strip1_max_current    = msg.data.strip1MaxCurrent;
             if (msg.data.strip2MaxCurrent    !== undefined) result.strip2_max_current    = msg.data.strip2MaxCurrent;
+            if (msg.data.bootCount           !== undefined) result.boot_count            = msg.data.bootCount;
+            if (msg.data.resetReason         !== undefined) result.reset_reason          = msg.data.resetReason;
+            if (msg.data.lastUptimeSec       !== undefined) result.last_uptime_sec       = msg.data.lastUptimeSec;
+            if (msg.data.minFreeHeap         !== undefined) result.min_free_heap         = msg.data.minFreeHeap;
             return result;
         },
     },
@@ -210,6 +221,15 @@ const tzLocal = {
                 strip1_max_current: 'strip1MaxCurrent', strip2_max_current: 'strip2MaxCurrent',
             };
             if (attrMap[key]) await ep.read('ledCtrlConfig', [attrMap[key]]);
+        },
+    },
+    restart: {
+        key: ['restart'],
+        convertSet: async (entity, key, value, meta) => {
+            registerCustomClusters(meta.device);
+            const ep = meta.device.getEndpoint(1);
+            await ep.write('ledCtrlConfig', {restart: 1});
+            return {state: {restart: ''}};
         },
     },
     segments: {
@@ -415,7 +435,7 @@ const definition = {
     extend: segLightExtends,
 
     fromZigbee: [fzLocal.config, fzLocal.segments, fzLocal.presets],
-    toZigbee: [tzLocal.strip_counts, tzLocal.segments, tzLocal.presets],
+    toZigbee: [tzLocal.strip_counts, tzLocal.restart, tzLocal.segments, tzLocal.presets],
     ota: true,  // Enable OTA update support
 
     exposes: [
@@ -440,6 +460,16 @@ const definition = {
         numericExpose('strip2_max_current', 'Strip 2 max current', ACCESS_ALL,
             'Maximum current for strip 2 in mA (0 = unlimited). Applied immediately.',
             {value_min: 0, value_max: 65535, value_step: 100, unit: 'mA'}),
+        enumExpose('restart', 'Restart', ACCESS_WRITE,
+            'Restart the device', ['Restart']),
+        numericExpose('boot_count', 'Boot count', ACCESS_READ,
+            'Monotonic boot counter (increments on every reset)'),
+        numericExpose('reset_reason', 'Reset reason', ACCESS_READ,
+            'Last reset cause (1=POWERON, 3=SOFTWARE, 4=PANIC, 5=INT_WDT, 6=TASK_WDT, 8=BROWNOUT, etc.)'),
+        numericExpose('last_uptime_sec', 'Last uptime', ACCESS_READ,
+            'Uptime in seconds before last reset (0 = unknown, e.g. after power loss)', {unit: 's'}),
+        numericExpose('min_free_heap', 'Min free heap', ACCESS_READ,
+            'Minimum free heap memory since boot (bytes)', {unit: 'B'}),
         ...segExposes,
         ...presetExposes,
     ],
@@ -466,9 +496,20 @@ const definition = {
     configure: async (device, coordinatorEndpoint, logger) => {
         registerCustomClusters(device);
         const ep1 = device.getEndpoint(1);
+
+        // Bind diag attrs and configure reporting so device pushes updates on change/keepalive
+        await ep1.bind('ledCtrlConfig', coordinatorEndpoint);
+        await ep1.configureReporting('ledCtrlConfig', [
+            {attribute: 'bootCount',      minimumReportInterval: 0, maximumReportInterval: 300, reportableChange: 0},
+            {attribute: 'resetReason',    minimumReportInterval: 0, maximumReportInterval: 300, reportableChange: 0},
+            {attribute: 'lastUptimeSec',  minimumReportInterval: 0, maximumReportInterval: 300, reportableChange: 0},
+            {attribute: 'minFreeHeap',    minimumReportInterval: 0, maximumReportInterval: 300, reportableChange: 0},
+        ]);
+
         await ep1.read('ledCtrlConfig', [
             'strip1Count', 'strip2Count', 'globalTransitionMs',
             'strip1Type', 'strip2Type', 'strip1MaxCurrent', 'strip2MaxCurrent',
+            'bootCount', 'resetReason', 'lastUptimeSec', 'minFreeHeap',
         ]);
 
         // Read all segment geometry so Z2M state reflects device NVS on re-interview

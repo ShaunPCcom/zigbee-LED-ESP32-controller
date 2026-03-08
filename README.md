@@ -15,6 +15,8 @@ A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home A
 - **Zigbee Router** — extends your Zigbee mesh (mains-powered)
 - **Home Assistant integration** — via Zigbee2MQTT external converter
 - **Serial CLI** — configure strip counts, types, power limits, segment geometry, and device settings
+- **Crash diagnostics** — boot count, reset reason, last uptime, and min heap exposed via Zigbee and CLI
+- **Software restart** — trigger device restart remotely via Z2M
 - **Over-the-air (OTA) firmware updates** — automated via GitHub releases
 
 ## Hardware Requirements
@@ -77,6 +79,11 @@ Each segment (EP1–EP8) exposes brightness, RGB color (hue/saturation), color t
 | `strip2_type` | U8 | Strip 2 LED type: 0 = SK6812, 1 = WS2812B (reboot required) |
 | `strip1_max_current` | U16 | Strip 1 max current in mA, 0 = unlimited |
 | `strip2_max_current` | U16 | Strip 2 max current in mA, 0 = unlimited |
+| `boot_count` (0x0030) | U32 | Monotonic boot counter (read-only, reporting enabled) |
+| `reset_reason` (0x0031) | U8 | Last reset cause: 1=POWERON, 3=SW, 4=PANIC, 5=INT_WDT, 6=TASK_WDT (read-only) |
+| `last_uptime_sec` (0x0032) | U32 | Uptime in seconds before last reset (read-only) |
+| `min_free_heap` (0x0033) | U32 | Minimum free heap since boot in bytes (read-only, updated every 60s) |
+| `restart` (0x00F0) | U8 | Write any value to restart the device (write-only) |
 
 **0xFC01 — Segment Geometry (EP1)**
 
@@ -318,6 +325,7 @@ Connect via serial monitor (`idf.py -p /dev/ttyACM0 monitor`). All commands are 
 | `led preset save <slot> [name]` | Save current state to slot 0-7 (optional name) |
 | `led preset apply <slot>` | Recall preset from slot 0-7 |
 | `led preset delete <slot>` | Delete preset from slot 0-7 |
+| `led diag` | Show crash diagnostics (boot count, reset reason, last uptime, min free heap) |
 | `led nvs` | NVS health check |
 | `led reboot` | Restart device |
 | `led repair` | Zigbee network reset (keeps config) |

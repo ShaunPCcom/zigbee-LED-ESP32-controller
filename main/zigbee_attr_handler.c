@@ -84,6 +84,13 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             return ESP_OK;
         }
 
+        /* Restart */
+        if (attr_id == ZB_ATTR_RESTART) {
+            ESP_LOGI(TAG, "Restart requested via Zigbee, restarting in 1s...");
+            esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
+            return ESP_OK;
+        }
+
         /* Strip count (requires reboot) */
         uint16_t new_count = *(uint16_t *)value;
         if (new_count >= 1 && new_count <= 500) {

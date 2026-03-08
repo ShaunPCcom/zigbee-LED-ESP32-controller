@@ -12,3 +12,6 @@ dependencies:
   zigbee_core:
     git: https://github.com/ShaunPCcom/esp32-zigbee-common.git
     path: zigbee_core
+  crash_diag:
+    git: https://github.com/ShaunPCcom/esp32-zigbee-common.git
+    path: crash_diag

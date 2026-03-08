@@ -17,6 +17,7 @@
 #include "segment_manager.h"
 #include "preset_manager.h"
 #include "version.h"
+#include "crash_diag.h"
 #include "esp_log.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "zigbee_ota.h"
@@ -161,6 +162,32 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip1_max_current_attr);
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_STRIP2_MAX_CURRENT,
             ESP_ZB_ZCL_ATTR_TYPE_U16, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE, &s_strip2_max_current_attr);
+
+        /* Crash diagnostics (read-only attributes for remote debugging) */
+        crash_diag_data_t diag;
+        crash_diag_get_data(&diag);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_BOOT_COUNT,
+            ESP_ZB_ZCL_ATTR_TYPE_U32,
+            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+            &diag.boot_count);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_RESET_REASON,
+            ESP_ZB_ZCL_ATTR_TYPE_U8,
+            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+            &diag.reset_reason);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_LAST_UPTIME_SEC,
+            ESP_ZB_ZCL_ATTR_TYPE_U32,
+            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+            &diag.last_uptime_sec);
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_MIN_FREE_HEAP,
+            ESP_ZB_ZCL_ATTR_TYPE_U32,
+            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+            &diag.min_free_heap);
+
+        static uint8_t s_restart_attr = 0;
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_RESTART,
+            ESP_ZB_ZCL_ATTR_TYPE_U8,
+            ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY,
+            &s_restart_attr);
 
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, dev_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 

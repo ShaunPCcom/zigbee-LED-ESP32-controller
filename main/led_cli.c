@@ -18,6 +18,7 @@
 #include "nvs.h"
 
 #include "led_cli.h"
+#include "crash_diag.h"
 #include "led_driver.h"
 #include "board_config.h"
 #include "config_storage.h"
@@ -52,6 +53,7 @@ static void print_help(void)
         "  led preset delete <slot>        (delete preset from slot 0-7)\n"
         "  led transition                  (show current global transition time)\n"
         "  led transition <ms>             (set global transition time in ms, 0-65535)\n"
+        "  led diag                        (show crash diagnostics)\n"
         "  led nvs                         (NVS health check)\n"
         "  led reboot                      (restart device)\n"
         "  led repair                      (Zigbee network reset / re-pair)\n"
@@ -85,6 +87,21 @@ static void print_config(void)
                type_names[t],
                mc, (mc == 0) ? " (unlimited)" : " mA");
     }
+}
+
+static void print_diag(void)
+{
+    crash_diag_data_t diag;
+    if (crash_diag_get_data(&diag) != ESP_OK) {
+        printf("diag: error\n");
+        return;
+    }
+    printf("=== Crash Diagnostics ===\n");
+    printf("  boot_count:      %" PRIu32 "\n", diag.boot_count);
+    printf("  reset_reason:    %u (%s)\n", diag.reset_reason,
+           crash_diag_reset_reason_str(diag.reset_reason));
+    printf("  last_uptime:     %" PRIu32 " sec\n", diag.last_uptime_sec);
+    printf("  min_free_heap:   %" PRIu32 " bytes\n", diag.min_free_heap);
 }
 
 static void cli_task(void *arg)
@@ -252,6 +269,8 @@ static void cli_task(void *arg)
                 }
                 continue;
             }
+
+            if (strcmp(cmd, "diag") == 0) { print_diag(); continue; }
 
             if (strcmp(cmd, "nvs") == 0) {
                 printf("=== NVS Health Check ===\n");
