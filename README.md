@@ -17,6 +17,7 @@ A Zigbee LED strip controller firmware for the ESP32-H2, integrating with Home A
 - **Serial CLI** — configure strip counts, types, power limits, segment geometry, and device settings
 - **Crash diagnostics** — boot count, reset reason, last uptime, and min heap exposed via Zigbee and CLI
 - **Software restart** — trigger device restart remotely via Z2M
+- **Remote factory reset** — type `factory-reset` in Z2M to wipe Zigbee network + NVS config
 - **Over-the-air (OTA) firmware updates** — automated via GitHub releases
 
 ## Hardware Requirements
@@ -84,6 +85,7 @@ Each segment (EP1–EP8) exposes brightness, RGB color (hue/saturation), color t
 | `last_uptime_sec` (0x0032) | U32 | Uptime in seconds before last reset (read-only) |
 | `min_free_heap` (0x0033) | U32 | Minimum free heap since boot in bytes (read-only, updated every 60s) |
 | `restart` (0x00F0) | U8 | Write any value to restart the device (write-only) |
+| `factory_reset` (0x00F1) | U8 | Write `0xFE` to trigger a full factory reset (write-only) |
 
 **0xFC01 — Segment Geometry (EP1)**
 
