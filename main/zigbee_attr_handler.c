@@ -86,8 +86,14 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
 
         /* Restart */
         if (attr_id == ZB_ATTR_RESTART) {
-            ESP_LOGI(TAG, "Restart requested via Zigbee, restarting in 1s...");
-            esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
+            zgb_ctrl_handle_restart();
+            return ESP_OK;
+        }
+
+        /* Factory reset */
+        if (attr_id == ZB_ATTR_FACTORY_RESET) {
+            extern void zigbee_full_factory_reset(void);
+            zgb_ctrl_handle_factory_reset(*(uint8_t *)value, zigbee_full_factory_reset);
             return ESP_OK;
         }
 

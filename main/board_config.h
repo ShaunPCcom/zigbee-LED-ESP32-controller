@@ -34,6 +34,12 @@ extern "C" {
 #define ZB_SEGMENT_EP_BASE             1    /* EP1 = segment 0, EP2 = segment 1, ... */
 #define ZB_ALL_EP   (ZB_SEGMENT_EP_BASE + MAX_SEGMENTS) /* EP9: "all segments" master control */
 
+/* Color temperature physical range (mireds) reported via ZCL ColorTempPhysicalMin/MaxMireds.
+ * 153 = 6500K (cool daylight), 500 = 2000K (candle).
+ * Z2M auto-generates presets: coolest=153, cool=250, neutral=370, warm=454, warmest=500. */
+#define COLOR_TEMP_MIN_MIREDS          153
+#define COLOR_TEMP_MAX_MIREDS          500
+
 /* Default power-on behavior (ZCL StartUpOnOff attr 0x4003)
  * 0x00 = off, 0x01 = on, 0x02 = toggle, 0xFF = previous */
 #define DEFAULT_STARTUP_ON_OFF         0xFF /* restore previous state */

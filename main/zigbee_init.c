@@ -57,7 +57,7 @@ static esp_zb_attribute_list_t *create_color_cluster(void)
 
     uint8_t hue = 0, sat = 0, cmode = 0, ecmode = 0;
     uint16_t ehue = 0, cx = 0x616B, cy = 0x607D;
-    uint16_t ctemp = 250, ctemp_min = 153, ctemp_max = 370;
+    uint16_t ctemp = 250, ctemp_min = 153, ctemp_max = 500;
 
     /* Hue/saturation attributes exist for SDK compatibility but are not used (XY mode only) */
     esp_zb_color_control_cluster_add_attr(color, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID, &hue);
@@ -188,6 +188,12 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             ESP_ZB_ZCL_ATTR_TYPE_U8,
             ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY,
             &s_restart_attr);
+
+        static uint8_t s_factory_reset_attr = 0;
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_FACTORY_RESET,
+            ESP_ZB_ZCL_ATTR_TYPE_U8,
+            ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY,
+            &s_factory_reset_attr);
 
         ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(cl, dev_cfg, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 

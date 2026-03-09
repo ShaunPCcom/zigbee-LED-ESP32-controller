@@ -520,29 +520,19 @@ constexpr uint8_t DEFAULT_BRIGHTNESS_LEVEL = 128;
  *   - 250 mireds = 1M / 250 = 4000K (neutral/cool white, office lighting)
  *   - 153 mireds = 6500K (cool daylight, ZCL physical min)
  *   - 370 mireds = 2700K (warm white, incandescent bulb)
+ *   - 500 mireds = 2000K (candle/firelight, deep amber)
  *
  * Why 4000K: Neutral color suitable for any environment. Not too warm (yellowish),
  * not too cool (bluish). Matches typical LED "daylight" bulbs.
  *
- * Range: Cluster reports 153-370 mireds (2700K-6500K), standard for RGBW strips.
+ * Range: Cluster reports 153-500 mireds (2000K-6500K).
+ * Z2M presets: coolest=153, cool=250, neutral=370, warm=454, warmest=500.
  */
 constexpr uint16_t DEFAULT_COLOR_TEMP_MIREDS = 250;
 
-/**
- * Minimum color temperature (153 mireds = 6500K cool daylight)
- *
- * ZCL ColorTempPhysicalMinMireds attribute. Hardware limit imposed by white
- * LED phosphor characteristics. Below 6500K, light becomes unnaturally blue.
- */
-constexpr uint16_t COLOR_TEMP_MIN_MIREDS = 153;
-
-/**
- * Maximum color temperature (370 mireds = 2700K warm incandescent)
- *
- * ZCL ColorTempPhysicalMaxMireds attribute. Above 2700K (lower mireds), light
- * becomes dim orange/red, not useful for illumination.
- */
-constexpr uint16_t COLOR_TEMP_MAX_MIREDS = 370;
+/* COLOR_TEMP_MIN_MIREDS and COLOR_TEMP_MAX_MIREDS are defined as #defines
+ * in board_config.h (153 and 500 respectively) so they are accessible from
+ * both C and C++ translation units. */
 
 /**
  * Default CIE color space X coordinate (0x616B = ~0.38)

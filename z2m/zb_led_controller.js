@@ -63,6 +63,7 @@ const ledCtrlConfigCluster = {
         lastUptimeSec:        {ID: 0x0032, type: ZCL_UINT32},
         minFreeHeap:          {ID: 0x0033, type: ZCL_UINT32},
         restart:              {ID: 0x00F0, type: ZCL_UINT8, write: true},
+        factoryReset:         {ID: 0x00F1, type: ZCL_UINT8, write: true},
     },
     commands: {},
     commandsResponse: {},
@@ -230,6 +231,19 @@ const tzLocal = {
             const ep = meta.device.getEndpoint(1);
             await ep.write('ledCtrlConfig', {restart: 1});
             return {state: {restart: ''}};
+        },
+    },
+    factory_reset: {
+        key: ['factory_reset_confirm'],
+        convertSet: async (entity, key, value, meta) => {
+            if (value !== 'factory-reset') {
+                meta.logger.warn(`[ZB_LED] Factory reset not triggered: type "factory-reset" to confirm`);
+                return;
+            }
+            meta.logger.warn(`[ZB_LED] Factory reset triggered via Z2M`);
+            registerCustomClusters(meta.device);
+            const ep = meta.device.getEndpoint(1);
+            await ep.write('ledCtrlConfig', {factoryReset: 0xFE}, {disableDefaultResponse: true});
         },
     },
     segments: {
@@ -406,11 +420,16 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
 
 // ---- 8 segment light extends (EP1-EP8) + EP9 "all segments" master ----
 // Each segment is a Color Dimmable Light with enhanced hue (16-bit precision) and color_temp (CT=white)
+// CT range extended to 500 mired (2000K) so Z2M auto-generates 5 distinct presets:
+//   coolest=153, cool=250, neutral=370, warm=454, warmest=500
+// With range [153,370], neutral and warmest both mapped to 370 (warmest had no effect).
+const ctConfig = {range: [153, 500]};
+
 const segLightExtends = [];
 for (let n = 1; n <= MAX_SEGMENTS; n++) {
     segLightExtends.push(light({
         color: {modes: ['hs'], enhancedHue: true},
-        colorTemp: {range: [153, 370]},
+        colorTemp: ctConfig,
         endpointNames: [`seg${n}`],
         powerOnBehavior: true,
         effect: false,
@@ -419,7 +438,7 @@ for (let n = 1; n <= MAX_SEGMENTS; n++) {
 // EP9: master "all segments" endpoint — commands here propagate to all segments simultaneously
 segLightExtends.push(light({
     color: {modes: ['hs'], enhancedHue: true},
-    colorTemp: {range: [153, 370]},
+    colorTemp: ctConfig,
     endpointNames: ['all'],
     powerOnBehavior: false,
     effect: false,
@@ -435,7 +454,7 @@ const definition = {
     extend: segLightExtends,
 
     fromZigbee: [fzLocal.config, fzLocal.segments, fzLocal.presets],
-    toZigbee: [tzLocal.strip_counts, tzLocal.restart, tzLocal.segments, tzLocal.presets],
+    toZigbee: [tzLocal.strip_counts, tzLocal.restart, tzLocal.factory_reset, tzLocal.segments, tzLocal.presets],
     ota: true,  // Enable OTA update support
 
     exposes: [
@@ -462,6 +481,8 @@ const definition = {
             {value_min: 0, value_max: 65535, value_step: 100, unit: 'mA'}),
         enumExpose('restart', 'Restart', ACCESS_WRITE,
             'Restart the device', ['Restart']),
+        textExpose('factory_reset_confirm', 'Factory Reset', ACCESS_WRITE,
+            'Type "factory-reset" exactly and press Set to perform a full factory reset. Erases all settings and Zigbee network data.'),
         numericExpose('boot_count', 'Boot count', ACCESS_READ,
             'Monotonic boot counter (increments on every reset)'),
         numericExpose('reset_reason', 'Reset reason', ACCESS_READ,

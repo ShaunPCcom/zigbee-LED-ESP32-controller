@@ -12,6 +12,7 @@
 
 #include "esp_err.h"
 #include "esp_zigbee_core.h"
+#include "zigbee_ctrl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +51,7 @@ extern "C" {
 #define ZB_ATTR_RESET_REASON            0x0031
 #define ZB_ATTR_LAST_UPTIME_SEC         0x0032
 #define ZB_ATTR_MIN_FREE_HEAP           0x0033
-#define ZB_ATTR_RESTART                 0x00F0  /* U8, write-only (write any value to restart) */
+/* ZB_ATTR_RESTART (0x00F0) and ZB_ATTR_FACTORY_RESET (0x00F1) defined in zigbee_ctrl.h */
 
 /**
  * @brief Custom cluster 0xFC01: Segment geometry

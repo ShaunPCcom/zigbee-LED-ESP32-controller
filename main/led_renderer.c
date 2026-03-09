@@ -124,6 +124,24 @@ void sync_zcl_from_state(void)
             &state[n].color_temp, false);
     }
 
+    /* Force physical min/max mireds on every endpoint (EP1-EP8 + EP9).
+     * The Zigbee stack persists these attributes in zb_storage and may restore
+     * stale values from a previous firmware build. Override unconditionally so
+     * a firmware update always takes effect without requiring a factory reset. */
+    uint16_t ct_phys_min = COLOR_TEMP_MIN_MIREDS;
+    uint16_t ct_phys_max = COLOR_TEMP_MAX_MIREDS;
+    for (int n = 0; n <= MAX_SEGMENTS; n++) {
+        uint8_t ep = (uint8_t)(ZB_SEGMENT_EP_BASE + n);
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MIN_MIREDS_ID,
+            &ct_phys_min, false);
+        esp_zb_zcl_set_attribute_val(ep, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MAX_MIREDS_ID,
+            &ct_phys_max, false);
+    }
+
     ESP_LOGI(TAG, "ZCL attribute store synced from saved state");
 }
 
@@ -200,14 +218,15 @@ void update_leds(void)
             if (state[n].color_mode == 2) {
                 if (led_driver_get_type(strip) == LED_STRIP_TYPE_WS2812B) {
                     /* WS2812B: approximate warm white via desaturated orange.
-                     * CT range: 153 mir (6500K, cool) to 370 mir (2700K, warm).
-                     * Cool end -> sat=0 (pure white). Warm end -> sat~140 (~55%, amber tint).
-                     * Hue fixed at 30° (orange/amber). Smooth, perceptually convincing. */
-                    uint16_t ct_cool = 153, ct_warm = 370;
+                     * CT range: 153 mir (6500K, cool) to 500 mir (2000K, warm).
+                     * Cool end -> sat=0 (pure white). Warm end -> sat~215 (~84%, amber tint).
+                     * Hue fixed at 28° (orange/amber). Smooth, perceptually convincing.
+                     * Z2M presets: coolest=153, cool=250, neutral=370, warm=454, warmest=500. */
+                    uint16_t ct_cool = 153, ct_warm = 500;
                     uint16_t ct_clamped = (ct < ct_cool) ? ct_cool : (ct > ct_warm) ? ct_warm : ct;
                     uint8_t t   = (uint8_t)(((uint32_t)(ct_clamped - ct_cool) * 255) / (ct_warm - ct_cool));
-                    uint8_t ww_sat = (uint8_t)(((uint32_t)t * 140) / 255);
-                    hsv_to_rgb(30, ww_sat, level, &r, &g, &b);
+                    uint8_t ww_sat = (uint8_t)(((uint32_t)t * 215) / 255);
+                    hsv_to_rgb(28, ww_sat, level, &r, &g, &b);
                 } else {
                     /* SK6812: drive White channel with brightness */
                     w = level;
