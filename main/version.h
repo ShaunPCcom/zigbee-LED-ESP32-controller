@@ -24,7 +24,7 @@ extern "C" {
  * ============================================================================ */
 #define FW_VERSION_MAJOR 1
 #define FW_VERSION_MINOR 5
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 2
 
 /* ============================================================================
  * DERIVED CONSTANTS - Do not modify, these are generated automatically
