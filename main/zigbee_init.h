@@ -20,7 +20,11 @@ extern "C" {
 
 /* Device identification */
 #define ZB_DEVICE_MANUFACTURER_NAME     "DIY"
+#if CONFIG_IDF_TARGET_ESP32C6
+#define ZB_DEVICE_MODEL_IDENTIFIER      "ZB_LED_CTRL-C6"
+#else
 #define ZB_DEVICE_MODEL_IDENTIFIER      "ZB_LED_CTRL"
+#endif
 #define ZB_DEVICE_SW_VERSION            1
 
 /**
@@ -51,6 +55,7 @@ extern "C" {
 #define ZB_ATTR_RESET_REASON            0x0031
 #define ZB_ATTR_LAST_UPTIME_SEC         0x0032
 #define ZB_ATTR_MIN_FREE_HEAP           0x0033
+#define ZB_ATTR_DIAG_RESET              0x0034  /* U8, write-only (write non-zero to reset boot counter) */
 /* ZB_ATTR_RESTART (0x00F0) and ZB_ATTR_FACTORY_RESET (0x00F1) defined in zigbee_ctrl.h */
 
 /**

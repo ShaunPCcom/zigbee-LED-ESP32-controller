@@ -183,6 +183,12 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
             ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
             &diag.min_free_heap);
 
+        static uint8_t s_diag_reset_attr = 0;
+        esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_DIAG_RESET,
+            ESP_ZB_ZCL_ATTR_TYPE_U8,
+            ESP_ZB_ZCL_ATTR_ACCESS_WRITE_ONLY,
+            &s_diag_reset_attr);
+
         static uint8_t s_restart_attr = 0;
         esp_zb_custom_cluster_add_custom_attr(dev_cfg, ZB_ATTR_RESTART,
             ESP_ZB_ZCL_ATTR_TYPE_U8,
@@ -329,6 +335,17 @@ static void zigbee_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(esp_zb_platform_config(&platform_cfg));
 
+    /* C6 runs as End Device for WiFi+Zigbee coexistence stability */
+#if CONFIG_IDF_TARGET_ESP32C6
+    esp_zb_cfg_t zb_cfg = {
+        .esp_zb_role = ESP_ZB_DEVICE_TYPE_ED,
+        .install_code_policy = false,
+        .nwk_cfg.zed_cfg = {
+            .ed_timeout = ESP_ZB_ED_AGING_TIMEOUT_64MIN,
+            .keep_alive = 3000,
+        },
+    };
+#else
     esp_zb_cfg_t zb_cfg = {
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_ROUTER,
         .install_code_policy = false,
@@ -336,6 +353,7 @@ static void zigbee_task(void *pvParameters)
             .max_children = 10,
         },
     };
+#endif
     esp_zb_init(&zb_cfg);
 
     esp_zb_core_action_handler_register(zigbee_action_handler);
@@ -347,7 +365,11 @@ static void zigbee_task(void *pvParameters)
 
 esp_err_t zigbee_init(void)
 {
+#if CONFIG_IDF_TARGET_ESP32C6
+    ESP_LOGI(TAG, "Initializing Zigbee stack as End Device (C6/WiFi coex)");
+#else
     ESP_LOGI(TAG, "Initializing Zigbee stack as Router");
+#endif
 
     BaseType_t ret = xTaskCreate(zigbee_task, "zb_main", 8192, NULL, 5, NULL);
     if (ret != pdPASS) {

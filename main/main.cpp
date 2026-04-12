@@ -29,6 +29,12 @@
 #include "zigbee_button.hpp"
 extern "C" {
 #include "crash_diag.h"
+#if CONFIG_IDF_TARGET_ESP32C6
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "wifi_manager.h"
+#include "web_server.h"
+#endif
 }
 
 static const char *TAG = "main";
@@ -141,13 +147,37 @@ extern "C" void app_main(void)
     /* Calculate initial power scale from NVS-loaded config */
     led_renderer_recalc_power_scale();
 
-    /* Initialize and start Zigbee */
+    /* Initialize and start Zigbee (and WiFi on C6) */
+#if CONFIG_IDF_TARGET_ESP32C6
+    /* C6: provisioning AP mode OR operational Zigbee+WiFi STA mode
+     *   Provisioning mode — no credentials: WiFi AP + captive portal, no Zigbee
+     *                        (softAP/802.15.4 coex is broken on C6)
+     *   Operational mode  — credentials present: Zigbee + WiFi STA (coex works) */
+    esp_netif_init();
+    esp_event_loop_create_default();
+    wifi_manager_init("led-ctrl");
+
+    if (wifi_manager_has_credentials()) {
+        ESP_LOGI(TAG, "WiFi credentials found — operational mode: Zigbee + WiFi STA");
+        ret = zigbee_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize Zigbee: %s", esp_err_to_name(ret));
+            return;
+        }
+        wifi_manager_start();
+    } else {
+        ESP_LOGI(TAG, "No WiFi credentials — provisioning mode: AP only");
+        wifi_manager_start();
+    }
+    web_server_start();
+#else
     ret = zigbee_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize Zigbee: %s", esp_err_to_name(ret));
         return;
     }
     ESP_LOGI(TAG, "Zigbee stack initialized as Router");
+#endif
 
     led_cli_start();
     ESP_LOGI(TAG, "CLI started");

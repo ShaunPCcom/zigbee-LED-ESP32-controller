@@ -7,6 +7,7 @@
  */
 
 #include "zigbee_attr_handler.h"
+#include "crash_diag.h"
 #include "preset_handler.h"
 #include "led_renderer.h"
 #include "segment_manager.h"
@@ -81,6 +82,12 @@ static esp_err_t handle_set_attr_value(const esp_zb_zcl_set_attr_value_message_t
             config_storage_save_strip_max_current(strip, ma);
             led_renderer_recalc_power_scale();
             ESP_LOGI(TAG, "Strip%d max_current -> %u mA", strip, ma);
+            return ESP_OK;
+        }
+
+        /* Boot count reset */
+        if (attr_id == ZB_ATTR_DIAG_RESET) {
+            if (*(uint8_t *)value) crash_diag_reset_boot_count();
             return ESP_OK;
         }
 

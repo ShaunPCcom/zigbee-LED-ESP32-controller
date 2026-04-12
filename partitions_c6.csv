@@ -1,0 +1,10 @@
+# ESP32-C6 Partition Table - 16MB Flash with Dual OTA + SPIFFS web assets
+# Name,      Type, SubType, Offset,   Size,    Flags
+nvs,         data, nvs,     0x9000,   24K,
+otadata,     data, ota,     ,         8K,
+phy_init,    data, phy,     ,         4K,
+ota_0,       app,  ota_0,   ,         3200K,
+ota_1,       app,  ota_1,   ,         3200K,
+zb_storage,  data, fat,     ,         16K,
+zb_fct,      data, fat,     ,         1K,
+www,         data, spiffs,  ,         2048K,

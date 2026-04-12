@@ -53,7 +53,8 @@ static void print_help(void)
         "  led preset delete <slot>        (delete preset from slot 0-7)\n"
         "  led transition                  (show current global transition time)\n"
         "  led transition <ms>             (set global transition time in ms, 0-65535)\n"
-        "  led diag                        (show crash diagnostics)\n"
+        "  led diag [show]                 (show crash diagnostics)\n"
+        "  led diag reset                  (reset boot counter to 0)\n"
         "  led nvs                         (NVS health check)\n"
         "  led reboot                      (restart device)\n"
         "  led repair                      (Zigbee network reset / re-pair)\n"
@@ -270,7 +271,15 @@ static void cli_task(void *arg)
                 continue;
             }
 
-            if (strcmp(cmd, "diag") == 0) { print_diag(); continue; }
+            if (strcmp(cmd, "diag") == 0) {
+                char *sub = strtok(NULL, " \t\r\n");
+                if (!sub || strcmp(sub, "show") == 0) { print_diag(); }
+                else if (strcmp(sub, "reset") == 0) {
+                    crash_diag_reset_boot_count();
+                    printf("Boot count reset to 0\n");
+                } else { printf("usage: led diag [show|reset]\n"); }
+                continue;
+            }
 
             if (strcmp(cmd, "nvs") == 0) {
                 printf("=== NVS Health Check ===\n");

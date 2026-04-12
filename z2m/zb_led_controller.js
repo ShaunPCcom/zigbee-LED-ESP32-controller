@@ -35,6 +35,7 @@ const ZCL_CHAR_STRING = 0x42;
 const ACCESS_ALL = 0b111;
 const ACCESS_READ = 0b001;
 const ACCESS_WRITE = 0b010;
+const ACCESS_SET = 0b010;  /* alias for ACCESS_WRITE, used for action-only controls */
 
 // ---- Custom cluster definitions ----
 const CLUSTER_DEVICE_CONFIG  = 0xFC00;
@@ -62,6 +63,7 @@ const ledCtrlConfigCluster = {
         resetReason:          {ID: 0x0031, type: ZCL_UINT8},
         lastUptimeSec:        {ID: 0x0032, type: ZCL_UINT32},
         minFreeHeap:          {ID: 0x0033, type: ZCL_UINT32},
+        diagReset:            {ID: 0x0034, type: ZCL_UINT8, write: true},
         restart:              {ID: 0x00F0, type: ZCL_UINT8, write: true},
         factoryReset:         {ID: 0x00F1, type: ZCL_UINT8, write: true},
     },
@@ -115,6 +117,11 @@ function registerCustomClusters(device) {
 }
 
 // ---- Expose helpers ----
+function binaryExpose(property, label, access, valueOn, valueOff, description) {
+    return {type: 'binary', name: property, label, property, access,
+        value_on: valueOn, value_off: valueOff, description};
+}
+
 function numericExpose(name, label, access, description, opts) {
     const e = {type: 'numeric', name, label, property: name, access, description};
     if (opts) Object.assign(e, opts);
@@ -224,6 +231,18 @@ const tzLocal = {
             if (attrMap[key]) await ep.read('ledCtrlConfig', [attrMap[key]]);
         },
     },
+    diag_reset: {
+        key: ['diag_reset_boot_count'],
+        convertSet: async (entity, key, value, meta) => {
+            if (!value) return;
+            registerCustomClusters(meta.device);
+            const ep = meta.device.getEndpoint(1);
+            await ep.write('ledCtrlConfig', {diagReset: 1});
+            meta.logger.info('[ZB_LED_CTRL] Boot count reset triggered');
+            return {state: {diag_reset_boot_count: false}};
+        },
+    },
+
     restart: {
         key: ['restart'],
         convertSet: async (entity, key, value, meta) => {
@@ -454,7 +473,7 @@ const definition = {
     extend: segLightExtends,
 
     fromZigbee: [fzLocal.config, fzLocal.segments, fzLocal.presets],
-    toZigbee: [tzLocal.strip_counts, tzLocal.restart, tzLocal.factory_reset, tzLocal.segments, tzLocal.presets],
+    toZigbee: [tzLocal.strip_counts, tzLocal.diag_reset, tzLocal.restart, tzLocal.factory_reset, tzLocal.segments, tzLocal.presets],
     ota: true,  // Enable OTA update support
 
     exposes: [
@@ -491,6 +510,8 @@ const definition = {
             'Uptime in seconds before last reset (0 = unknown, e.g. after power loss)', {unit: 's'}),
         numericExpose('min_free_heap', 'Min free heap', ACCESS_READ,
             'Minimum free heap memory since boot (bytes)', {unit: 'B'}),
+        binaryExpose('diag_reset_boot_count', 'Reset boot count', ACCESS_SET, true, false,
+            'Write true to reset the boot counter to 0'),
         ...segExposes,
         ...presetExposes,
     ],
@@ -540,6 +561,16 @@ const definition = {
         }
         await ep1.read('segmentConfig', segGeomAttrs);
 
+        // Ensure genOnOff reports immediately on change — light() helper default may not
+        // configure minimumReportInterval: 0 correctly on all segment EPs.
+        // minimumReportInterval: 0 gives Sonoff/IKEA-style few-second state recovery.
+        for (let n = 1; n <= MAX_SEGMENTS; n++) {
+            const segEp = device.getEndpoint(n);
+            await segEp.configureReporting('genOnOff', [
+                {attribute: 'onOff', minimumReportInterval: 0, maximumReportInterval: 300, reportableChange: 0},
+            ]);
+        }
+
         // Read preset configuration
         await ep1.read('presetConfig', ['presetCount', 'activePreset']);
         const presetNameAttrs = [];
@@ -550,4 +581,12 @@ const definition = {
     },
 };
 
-module.exports = definition;
+// ---- C6 variant (WiFi+Web UI, End Device) ----
+const definitionC6 = {
+    ...definition,
+    zigbeeModel: ['ZB_LED_CTRL-C6'],
+    model: 'ZB_LED_CTRL-C6',
+    description: 'Zigbee LED Strip Controller (ESP32-C6) — 8 RGBW segments, dual strip, Web UI',
+};
+
+module.exports = [definition, definitionC6];
