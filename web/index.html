@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LED Controller</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="header-inner">
+        <div class="header-brand">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5L12 2Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            <circle cx="12" cy="12" r="3" fill="currentColor"/>
+          </svg>
+          <div>
+            <h1>LED Controller</h1>
+            <span id="host-label" class="host-label">connecting…</span>
+          </div>
+        </div>
+        <div class="header-badges">
+          <span id="wifi-badge" class="badge badge-dim">
+            <span id="wifi-dot" class="dot"></span>
+            <span id="wifi-text">—</span>
+          </span>
+          <span id="fw-badge" class="badge badge-dim mono">—</span>
+        </div>
+      </div>
+      <div id="ota-banner" class="ota-banner hidden">
+        <span>Update available: <strong id="ota-ver">—</strong></span>
+        <button id="btn-ota-apply" class="btn btn-sm btn-acc">Flash Now</button>
+      </div>
+    </header>
+
+    <nav class="tab-nav" role="tablist">
+      <button class="tab-btn active" data-tab="segments">Segments</button>
+      <button class="tab-btn" data-tab="presets">Presets</button>
+      <button class="tab-btn" data-tab="config">Config</button>
+      <button class="tab-btn" data-tab="wifi">WiFi</button>
+      <button class="tab-btn" data-tab="system">System</button>
+    </nav>
+
+    <main>
+      <section id="tab-segments" class="tab-content active">
+        <div class="seg-grid" id="seg-grid"></div>
+      </section>
+
+      <section id="tab-presets" class="tab-content">
+        <div class="preset-grid" id="preset-grid"></div>
+      </section>
+
+      <section id="tab-config" class="tab-content">
+        <div class="config-panel">
+          <h2 class="section-heading">Strip Configuration</h2>
+          <div class="strip-config-grid" id="strip-config-grid"></div>
+          <div class="form-row">
+            <label>Global Transition Time</label>
+            <div class="slider-row">
+              <input type="range" id="cfg-transition" min="0" max="2000" step="50" value="100">
+              <span class="mono value-chip" id="cfg-transition-val">100ms</span>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-acc" id="btn-save-config">Save Configuration</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-wifi" class="tab-content">
+        <div class="config-panel">
+          <h2 class="section-heading">Network Status</h2>
+          <div id="wifi-status-panel" class="info-panel"></div>
+
+          <h2 class="section-heading">Connect to Network</h2>
+          <div class="form-row">
+            <label>Network</label>
+            <div class="scan-row">
+              <select id="wifi-ssid-select"><option value="">— select network —</option></select>
+              <button class="btn btn-sm" id="btn-wifi-scan">Scan</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Password</label>
+            <input type="password" id="wifi-password" placeholder="leave empty if open network" autocomplete="current-password">
+          </div>
+          <div class="form-row">
+            <label>Hostname</label>
+            <input type="text" id="wifi-hostname" placeholder="led-ctrl" autocomplete="off" spellcheck="false">
+            <span class="field-hint">Accessible at http://&lt;hostname&gt;.local after connection</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-acc" id="btn-wifi-save">Connect</button>
+            <button class="btn btn-danger" id="btn-wifi-reset">Forget Network</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-system" class="tab-content">
+        <div class="config-panel">
+          <h2 class="section-heading">System Status</h2>
+          <div class="stat-grid" id="stat-grid"></div>
+
+          <h2 class="section-heading">OTA Updates</h2>
+          <div id="ota-status-panel" class="info-panel mono"></div>
+          <div class="btn-row">
+            <button class="btn" id="btn-ota-check">Check for Update</button>
+          </div>
+          <div class="form-row">
+            <label>Upload Firmware File</label>
+            <div class="file-row">
+              <input type="file" id="ota-file" accept=".bin,.ota">
+              <button class="btn btn-sm" id="btn-ota-upload">Flash</button>
+            </div>
+            <div id="ota-progress" class="ota-progress hidden"></div>
+          </div>
+
+          <h2 class="section-heading">Diagnostics</h2>
+          <div class="stat-grid" id="diag-grid"></div>
+          <div class="btn-row">
+            <button class="btn btn-warning" id="btn-diag-reset">Reset Boot Counter</button>
+          </div>
+
+          <h2 class="section-heading">Device Control</h2>
+          <div class="btn-row">
+            <button class="btn" id="btn-restart">Restart</button>
+            <button class="btn" id="btn-zb-reset">Zigbee Reset</button>
+            <button class="btn btn-danger" id="btn-factory-reset">Factory Reset</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
