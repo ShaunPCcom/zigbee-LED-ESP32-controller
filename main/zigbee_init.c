@@ -94,7 +94,11 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
 
     /* Add manufacturer/model/version to ALL segments (prevents re-interview unsupported issue) */
     static const uint8_t manufacturer[] = {3, 'D', 'I', 'Y'};
+#if CONFIG_IDF_TARGET_ESP32C6
+    static const uint8_t model[] = {14, 'Z', 'B', '_', 'L', 'E', 'D', '_', 'C', 'T', 'R', 'L', '-', 'C', '6'};
+#else
     static const uint8_t model[] = {11, 'Z', 'B', '_', 'L', 'E', 'D', '_', 'C', 'T', 'R', 'L'};
+#endif
     esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, (void*)manufacturer);
     esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, (void*)model);
     esp_zb_basic_cluster_add_attr(basic, ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, (void*)FIRMWARE_SW_BUILD_ID);
@@ -279,7 +283,11 @@ static esp_zb_cluster_list_t *create_segment_clusters(int seg_idx)
         /* Add OTA cluster to primary endpoint (EP1) */
         zigbee_ota_config_t ota_cfg = ZIGBEE_OTA_CONFIG_DEFAULT();
         ota_cfg.manufacturer_code = 0x131B;  /* Espressif */
-        ota_cfg.image_type = 0x0002;         /* LED Controller (different from LD2450) */
+#if CONFIG_IDF_TARGET_ESP32C6
+        ota_cfg.image_type = 0x0004;         /* LED Controller C6 */
+#else
+        ota_cfg.image_type = 0x0002;         /* LED Controller H2 */
+#endif
         ota_cfg.current_file_version = FIRMWARE_VERSION;
         ota_cfg.hw_version = 1;
         ota_cfg.query_interval_minutes = 1440;  /* Check every 24 hours */
