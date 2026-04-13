@@ -26,11 +26,22 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
 
-          # Strip any suffix (e.g., -test, -alpha, -rc1)
+          # Strip any suffix (e.g., -beta, -rc1)
           VERSION_CLEAN="${VERSION%%-*}"
+
+          # Detect pre-release (tag contains hyphen after version)
+          if [[ "$VERSION" == *-* ]]; then
+            IS_PRERELEASE=true
+            CHANNEL="beta"
+          else
+            IS_PRERELEASE=false
+            CHANNEL="stable"
+          fi
 
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
 
           # Convert version to hex for fileVersion (use clean version for numbers)
           IFS='.' read -r major minor patch <<< "$VERSION_CLEAN"
@@ -41,17 +52,20 @@ jobs:
           file_version_dec=$((major * 65536 + minor * 256 + patch))
           file_version=$(printf "0x%08x" $file_version_dec)
 
+          echo "major=${major}" >> $GITHUB_OUTPUT
+          echo "minor=${minor}" >> $GITHUB_OUTPUT
+          echo "patch=${patch}" >> $GITHUB_OUTPUT
           echo "file_version_hex=${file_version}" >> $GITHUB_OUTPUT
           echo "file_version_dec=${file_version_dec}" >> $GITHUB_OUTPUT
 
           echo "📦 Release version: ${VERSION}"
           echo "📦 Version (clean): ${VERSION_CLEAN}"
+          echo "📦 Channel: ${CHANNEL}"
           echo "🔢 File version (hex): ${file_version}"
           echo "🔢 File version (dec): ${file_version_dec}"
 
       - name: Validate version in code
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           MAJOR="${{ steps.version.outputs.major }}"
           MINOR="${{ steps.version.outputs.minor }}"
           PATCH="${{ steps.version.outputs.patch }}"
@@ -78,7 +92,7 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Version validated in code"
+          echo "✅ Version validated: FW_VERSION_MAJOR=${MAJOR} MINOR=${MINOR} PATCH=${PATCH}"
 
       - name: Install ESP-IDF dependencies
         run: |
@@ -99,20 +113,29 @@ jobs:
           git clone --recursive --branch main --depth 1 https://github.com/espressif/esp-zigbee-sdk.git
           ls -la esp-zigbee-sdk/tools/image_builder_tool/
 
-      - name: Build firmware
+      - name: Build firmware (H2)
         run: |
           . esp-idf/export.sh
-          idf.py set-target esp32h2
-          idf.py build
+          idf.py -B build_h2 set-target esp32h2
+          idf.py -B build_h2 build
 
-          echo "✅ Firmware built successfully"
-          ls -lh build/zb_led_controller.bin
+          echo "✅ H2 firmware built"
+          ls -lh build_h2/zb_led_controller.bin
+
+      - name: Build firmware (C6)
+        run: |
+          . esp-idf/export.sh
+          idf.py -B build_c6 set-target esp32c6
+          idf.py -B build_c6 build
+
+          echo "✅ C6 firmware built"
+          ls -lh build_c6/zb_led_controller.bin
 
       - name: Install zigpy for OTA image creation
         run: |
           python3 -m pip install zigpy
 
-      - name: Create H2 OTA image
+      - name: Create OTA images
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
@@ -122,34 +145,17 @@ jobs:
             -v ${FILE_VERSION_HEX} \
             -m 0x131B \
             -i 0x0002 \
-            -f build/zb_led_controller.bin
-
-          echo "✅ H2 OTA image created"
-          ls -lh zb_led_controller_v${VERSION}.ota
-
-      - name: Build C6 firmware
-        run: |
-          . esp-idf/export.sh
-          idf.py set-target esp32c6
-          idf.py build
-
-          echo "✅ C6 firmware built successfully"
-          ls -lh build/zb_led_controller.bin
-
-      - name: Create C6 OTA image
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
+            -f build_h2/zb_led_controller.bin
 
           python3 esp-zigbee-sdk/tools/image_builder_tool/image_builder_tool.py \
             -c zb_led_ctrl_c6_v${VERSION}.ota \
             -v ${FILE_VERSION_HEX} \
             -m 0x131B \
             -i 0x0004 \
-            -f build/zb_led_controller.bin
+            -f build_c6/zb_led_controller.bin
 
-          echo "✅ C6 OTA image created"
-          ls -lh zb_led_ctrl_c6_v${VERSION}.ota
+          echo "✅ OTA images created"
+          ls -lh zb_led_controller_v${VERSION}.ota zb_led_ctrl_c6_v${VERSION}.ota
 
       - name: Generate release notes
         id: release_notes
@@ -175,14 +181,22 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
+          IS_PRERELEASE="${{ steps.version.outputs.is_prerelease }}"
+          CHANNEL="${{ steps.version.outputs.channel }}"
+
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
 
           gh release create "${TAG}" \
             zb_led_controller_v${VERSION}.ota \
             zb_led_ctrl_c6_v${VERSION}.ota \
-            --title "ZB-H2-LED ${TAG}" \
-            --notes-file ${{ steps.release_notes.outputs.notes_file }}
+            --title "ZB-H2-LED ${TAG} [${CHANNEL}]" \
+            --notes-file ${{ steps.release_notes.outputs.notes_file }} \
+            ${PRERELEASE_FLAG}
 
-          echo "✅ GitHub release created: ${TAG}"
+          echo "✅ GitHub release created: ${TAG} (${CHANNEL})"
 
       - name: Update OTA index
         run: |
@@ -190,7 +204,7 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           FILE_VERSION_DEC="${{ steps.version.outputs.file_version_dec }}"
 
-          # Create/update OTA index — H2 (imageType 2) + C6 (imageType 4)
+          # Update OTA index — H2 (imageType 2) + C6 (imageType 4)
           cat > z2m/ota_index.json <<EOF
           [
             {
@@ -214,15 +228,28 @@ jobs:
       - name: Commit and push OTA index
         run: |
           TAG="${{ steps.version.outputs.tag }}"
+          CHANNEL="${{ steps.version.outputs.channel }}"
+          IS_PRERELEASE="${{ steps.version.outputs.is_prerelease }}"
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            BRANCH="dev"
+          else
+            BRANCH="master"
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add z2m/ota_index.json
-          git diff --staged --quiet || git commit -m "chore: update OTA index for ${TAG}"
-          git push origin HEAD:master
+          # Fetch and checkout the target branch (workflow runs in detached HEAD at tag commit)
+          git fetch origin ${BRANCH}
+          git checkout ${BRANCH}
+          git pull origin ${BRANCH}
 
-          echo "✅ OTA index committed and pushed"
+          git add z2m/ota_index.json
+          git diff --staged --quiet || git commit -m "chore: update ${CHANNEL} OTA index for ${TAG}"
+          git push origin ${BRANCH}
+
+          echo "✅ OTA index committed and pushed to ${BRANCH} (${CHANNEL})"
 
       - name: Trigger OTA index aggregator
         run: |
@@ -238,12 +265,18 @@ jobs:
 
       - name: Release Summary
         run: |
+          CHANNEL="${{ steps.version.outputs.channel }}"
           echo "🎉 Release Complete!"
           echo ""
           echo "📦 Version: ${{ steps.version.outputs.version }}"
           echo "🏷️  Tag: ${{ steps.version.outputs.tag }}"
+          echo "📡 Channel: ${CHANNEL}"
           echo "📄 H2 OTA: zb_led_controller_v${{ steps.version.outputs.version }}.ota (imageType 0x0002)"
           echo "📄 C6 OTA: zb_led_ctrl_c6_v${{ steps.version.outputs.version }}.ota (imageType 0x0004)"
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
           echo ""
-          echo "Users will be notified of the update within 24 hours (or on manual check)."
+          if [ "$CHANNEL" = "beta" ]; then
+            echo "Beta testers: point Z2M OTA index to the dev branch z2m/ota_index.json"
+          else
+            echo "Users will be notified of the update within 24 hours (or on manual check)."
+          fi
