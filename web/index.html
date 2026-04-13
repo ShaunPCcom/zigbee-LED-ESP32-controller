@@ -80,22 +80,27 @@
           <div class="form-row">
             <label>Network</label>
             <div class="scan-row">
-              <select id="wifi-ssid-select"><option value="">— select network —</option></select>
-              <button class="btn btn-sm" id="btn-wifi-scan">Scan</button>
+              <select id="wifi-net-select" onchange="wfOnChange()"></select>
+              <button class="btn btn-sm" onclick="wfScan()">↻ Scan</button>
             </div>
           </div>
-          <div class="form-row">
+          <div id="wifi-manual-row" class="form-row" style="display:none">
+            <label>SSID</label>
+            <input type="text" id="wifi-manual-ssid" placeholder="Enter SSID" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="wifi-password-row" class="form-row">
             <label>Password</label>
             <input type="password" id="wifi-password" placeholder="leave empty if open network" autocomplete="current-password">
           </div>
-          <div class="form-row">
+          <div id="wifi-hostname-row" class="form-row">
             <label>Hostname</label>
             <input type="text" id="wifi-hostname" placeholder="led-ctrl" autocomplete="off" spellcheck="false">
             <span class="field-hint">Accessible at http://&lt;hostname&gt;.local after connection</span>
           </div>
           <div class="btn-row">
-            <button class="btn btn-acc" id="btn-wifi-save">Connect</button>
-            <button class="btn btn-danger" id="btn-wifi-reset">Forget Network</button>
+            <button class="btn btn-acc" id="wifi-action-btn"
+              data-connect-class="btn btn-acc" data-reset-class="btn btn-danger"
+              onclick="wfAction()">✓ Connect</button>
           </div>
         </div>
       </section>
@@ -137,6 +142,7 @@
   </div>
 
   <div id="toast-container"></div>
+  <script src="/wifi.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

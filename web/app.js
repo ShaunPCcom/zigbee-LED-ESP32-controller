@@ -494,57 +494,6 @@ function renderWifiStatus(status) {
       host: ${window.location.hostname}</span>` : ''}`;
 }
 
-async function doWifiScan() {
-  const btn = document.getElementById('btn-wifi-scan');
-  btn.disabled = true;
-  btn.textContent = 'Scanning…';
-  try {
-    const list = await apiGet('/api/wifi-scan');
-    const sel = document.getElementById('wifi-ssid-select');
-    sel.innerHTML = '<option value="">— select network —</option>';
-    (list || []).sort((a, b) => b.rssi - a.rssi).forEach(ap => {
-      const opt = document.createElement('option');
-      opt.value = ap.ssid;
-      opt.textContent = `${ap.ssid}  (${ap.rssi} dBm)`;
-      sel.appendChild(opt);
-    });
-  } catch (e) {
-    toast(`Scan failed: ${e.message}`, 'error');
-  }
-  btn.disabled = false;
-  btn.textContent = 'Scan';
-}
-
-async function doWifiSave() {
-  const ssid = document.getElementById('wifi-ssid-select').value;
-  const pass = document.getElementById('wifi-password').value;
-  const host = document.getElementById('wifi-hostname').value.trim();
-  if (!ssid) { toast('Select a network', 'warning'); return; }
-  if (!host) { toast('Hostname is required', 'warning'); return; }
-  if (!/^[A-Za-z0-9-]+$/.test(host)) { toast('Hostname: letters, numbers, hyphens only', 'warning'); return; }
-  try {
-    const r = await apiPost('/api/wifi', { ssid, password: pass, hostname: host });
-    toast(`Connecting to ${ssid}…`, 'ok');
-    if (r.hostname) {
-      setTimeout(() => {
-        window.location.href = `http://${r.hostname}/`;
-      }, 3000);
-    }
-  } catch (e) {
-    toast(`WiFi error: ${e.message}`, 'error');
-  }
-}
-
-async function doWifiReset() {
-  if (!confirm('Forget saved WiFi credentials?')) return;
-  try {
-    await apiPost('/api/wifi-reset');
-    toast('WiFi credentials cleared — device will restart in AP mode', 'warning');
-  } catch (e) {
-    toast(`Reset failed: ${e.message}`, 'error');
-  }
-}
-
 /* ======================================================================
    System Tab
    ====================================================================== */
@@ -677,11 +626,6 @@ function bindUI() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
-
-  /* WiFi tab */
-  document.getElementById('btn-wifi-scan').addEventListener('click', doWifiScan);
-  document.getElementById('btn-wifi-save').addEventListener('click', doWifiSave);
-  document.getElementById('btn-wifi-reset').addEventListener('click', doWifiReset);
 
   /* System tab */
   document.getElementById('btn-ota-check').addEventListener('click', doOtaCheck);
