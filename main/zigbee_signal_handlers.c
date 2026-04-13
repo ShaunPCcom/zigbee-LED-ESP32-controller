@@ -105,11 +105,22 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 board_led_set_state_pairing();
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
             } else {
+#if CONFIG_IDF_TARGET_ESP32C6
+                /* C6 runs as an End Device. Unlike a Router, an ED does not
+                 * broadcast routing announcements on boot, so Z2M won't know
+                 * it's back online unless it receives a ZDO Device_annce.
+                 * Trigger a rejoin via NETWORK_STEERING — this sends the
+                 * Device_annce that Z2M needs to mark the device as online. */
+                ESP_LOGI(TAG, "Device rebooted (ED), rejoining to send device announcement");
+                board_led_set_state_pairing();
+                esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_NETWORK_STEERING);
+#else
                 ESP_LOGI(TAG, "Device rebooted, already joined network");
                 board_led_set_state_joined();
                 s_network_joined = true;
                 configure_diag_reporting();
                 esp_zb_scheduler_alarm(restore_leds_cb, 0, 5500);
+#endif
             }
         } else {
             ESP_LOGE(TAG, "Device start/reboot failed: %s", esp_err_to_name(status));
