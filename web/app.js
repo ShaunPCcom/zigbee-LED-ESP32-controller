@@ -282,6 +282,7 @@ function updateGlowBar(card, seg) {
 
 function bindSegCard(card, idx, initSeg) {
   /* local mutable copy of this segment */
+  const q = id => card.querySelector(`#${id}`);
   const patch = () => {
     const seg = S.segments[idx];
     if (!seg) return;
@@ -301,11 +302,11 @@ function bindSegCard(card, idx, initSeg) {
   };
 
   /* on/off */
-  const onEl = document.getElementById(`seg-on-${idx}`);
+  const onEl = q(`seg-on-${idx}`);
   onEl.addEventListener('change', () => mutate({ on: onEl.checked }));
 
   /* level */
-  const lvlEl = document.getElementById(`seg-lvl-${idx}`);
+  const lvlEl = q(`seg-lvl-${idx}`);
   lvlEl.addEventListener('input', () => mutate({ level: +lvlEl.value }));
 
   /* mode buttons */
@@ -314,32 +315,32 @@ function bindSegCard(card, idx, initSeg) {
   });
 
   /* hue */
-  const hueEl = document.getElementById(`seg-hue-${idx}`);
+  const hueEl = q(`seg-hue-${idx}`);
   hueEl.addEventListener('input', () => mutate({ hue: +hueEl.value }));
 
   /* sat */
-  const satEl = document.getElementById(`seg-sat-${idx}`);
+  const satEl = q(`seg-sat-${idx}`);
   satEl.addEventListener('input', () => mutate({ sat: +satEl.value }));
 
   /* ct */
-  const ctEl = document.getElementById(`seg-ct-${idx}-r`);
+  const ctEl = q(`seg-ct-${idx}-r`);
   ctEl.addEventListener('input', () => mutate({ ct: +ctEl.value }));
 
   /* startup */
-  const suEl = document.getElementById(`seg-startup-${idx}`);
+  const suEl = q(`seg-startup-${idx}`);
   suEl.addEventListener('change', () => mutate({ startup: suEl.value }));
 
   /* geometry */
-  const geomToggle = document.getElementById(`geom-toggle-${idx}`);
-  const geomBody   = document.getElementById(`geom-body-${idx}`);
+  const geomToggle = q(`geom-toggle-${idx}`);
+  const geomBody   = q(`geom-body-${idx}`);
   geomToggle.addEventListener('click', () => {
     const open = geomBody.classList.toggle('open');
     geomToggle.classList.toggle('open', open);
   });
 
-  const gsEl = document.getElementById(`seg-gstart-${idx}`);
-  const gcEl = document.getElementById(`seg-gcount-${idx}`);
-  const gstEl = document.getElementById(`seg-gstrip-${idx}`);
+  const gsEl  = q(`seg-gstart-${idx}`);
+  const gcEl  = q(`seg-gcount-${idx}`);
+  const gstEl = q(`seg-gstrip-${idx}`);
   gsEl.addEventListener('change', () => mutate({ start: +gsEl.value }));
   gcEl.addEventListener('change', () => mutate({ count: +gcEl.value }));
   gstEl.addEventListener('change', () => mutate({ strip: +gstEl.value }));
@@ -481,17 +482,24 @@ function renderWifiStatus(status) {
   const panel = document.getElementById('wifi-status-panel');
   const w = status.wifi || 'unknown';
   const labels = {
-    connected: `Connected`,
-    ap:        `AP mode — connect to set up`,
-    connecting:`Connecting…`,
-    failed:    `Connection failed`,
-    init:      `Initialising…`,
+    connected:  'Connected',
+    ap:         'AP mode — connect to set up',
+    connecting: 'Connecting…',
+    failed:     'Connection failed',
+    init:       'Initialising…',
   };
+  const dotCls = w === 'connected' ? 'ok' : w === 'ap' ? 'warn' : 'err';
+  let rows = '';
+  if (w === 'connected') {
+    if (status.ssid)     rows += `<div class="wifi-status-row"><span>SSID</span><span class="mono">${status.ssid}</span></div>`;
+    const host = status.hostname || window.location.hostname;
+    rows += `<div class="wifi-status-row"><span>Hostname</span><span class="mono">${host}</span></div>`;
+  }
   panel.innerHTML = `
-    <span class="dot ${w === 'connected' ? 'ok' : w === 'ap' ? 'warn' : 'err'}" style="display:inline-block;margin-right:8px"></span>
-    <span class="mono">${labels[w] || w}</span>
-    ${w === 'connected' ? `<br><span class="mono" style="color:var(--text-muted);font-size:11px;margin-top:4px;display:block">
-      host: ${window.location.hostname}</span>` : ''}`;
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:${rows ? '8px' : '0'}">
+      <span class="dot ${dotCls}"></span>
+      <span class="mono">${labels[w] || w}</span>
+    </div>${rows}`;
 }
 
 /* ======================================================================
@@ -526,7 +534,6 @@ function renderSystemStatus(status) {
     { label: 'Firmware',  value: status.firmware || '—' },
     { label: 'Uptime',    value: fmtUptime(status.uptime_sec || 0) },
     { label: 'Free Heap', value: fmtBytes(status.free_heap || 0) },
-    { label: 'WiFi',      value: status.wifi || '—' },
   ]);
 }
 
@@ -598,6 +605,33 @@ async function doOtaUpload() {
   }
 }
 
+async function loadOtaSettings() {
+  try {
+    const [urlData, intData] = await Promise.all([
+      apiGet('/api/ota/index-url'),
+      apiGet('/api/ota/interval'),
+    ]);
+    const urlEl = document.getElementById('ota-index-url');
+    const intEl = document.getElementById('ota-interval-hours');
+    if (urlEl && urlData.url) urlEl.value = urlData.url;
+    if (intEl && intData.interval_hours) intEl.value = intData.interval_hours;
+  } catch (_) {}
+}
+
+async function saveOtaSettings() {
+  const urlEl = document.getElementById('ota-index-url');
+  const intEl = document.getElementById('ota-interval-hours');
+  try {
+    await Promise.all([
+      apiPost('/api/ota/index-url', { url: urlEl.value.trim() }),
+      apiPost('/api/ota/interval',  { interval_hours: +intEl.value }),
+    ]);
+    toast('OTA settings saved', 'ok');
+  } catch (e) {
+    toast(`OTA settings error: ${e.message}`, 'error');
+  }
+}
+
 async function doDiagReset() {
   if (!confirm('Reset boot counter to 0?')) return;
   try {
@@ -629,6 +663,7 @@ function bindUI() {
 
   /* System tab */
   document.getElementById('btn-ota-check').addEventListener('click', doOtaCheck);
+  document.getElementById('btn-ota-settings-save').addEventListener('click', saveOtaSettings);
   document.getElementById('btn-ota-apply').addEventListener('click', () => {
     if (S.ota.available) doOtaApply('');  /* empty url = server uses cached latest url */
   });
@@ -667,6 +702,7 @@ async function init() {
       apiGet('/api/ota/status'),
       apiGet('/api/diag'),
     ]);
+    loadOtaSettings(); /* non-blocking — populates fields when ready */
 
     applyStatus(status);
     renderSystemStatus(status);
