@@ -91,7 +91,7 @@ jobs:
         run: |
           git clone --recursive --branch v5.5.2 --depth 1 https://github.com/espressif/esp-idf.git
           cd esp-idf
-          ./install.sh esp32h2
+          ./install.sh esp32h2,esp32c6
 
       - name: Clone ESP Zigbee SDK
         run: |
@@ -112,7 +112,7 @@ jobs:
         run: |
           python3 -m pip install zigpy
 
-      - name: Create OTA image
+      - name: Create H2 OTA image
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
@@ -124,8 +124,32 @@ jobs:
             -i 0x0002 \
             -f build/zb_led_controller.bin
 
-          echo "✅ OTA image created"
+          echo "✅ H2 OTA image created"
           ls -lh zb_led_controller_v${VERSION}.ota
+
+      - name: Build C6 firmware
+        run: |
+          . esp-idf/export.sh
+          idf.py set-target esp32c6
+          idf.py build
+
+          echo "✅ C6 firmware built successfully"
+          ls -lh build/zb_led_controller.bin
+
+      - name: Create C6 OTA image
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
+
+          python3 esp-zigbee-sdk/tools/image_builder_tool/image_builder_tool.py \
+            -c zb_led_ctrl_c6_v${VERSION}.ota \
+            -v ${FILE_VERSION_HEX} \
+            -m 0x131B \
+            -i 0x0004 \
+            -f build/zb_led_controller.bin
+
+          echo "✅ C6 OTA image created"
+          ls -lh zb_led_ctrl_c6_v${VERSION}.ota
 
       - name: Generate release notes
         id: release_notes
@@ -154,6 +178,7 @@ jobs:
 
           gh release create "${TAG}" \
             zb_led_controller_v${VERSION}.ota \
+            zb_led_ctrl_c6_v${VERSION}.ota \
             --title "ZB-H2-LED ${TAG}" \
             --notes-file ${{ steps.release_notes.outputs.notes_file }}
 
@@ -165,7 +190,7 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           FILE_VERSION_DEC="${{ steps.version.outputs.file_version_dec }}"
 
-          # Create/update OTA index
+          # Create/update OTA index — H2 (imageType 2) + C6 (imageType 4)
           cat > z2m/ota_index.json <<EOF
           [
             {
@@ -173,6 +198,12 @@ jobs:
               "imageType": 2,
               "fileVersion": ${FILE_VERSION_DEC},
               "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/zb_led_controller_v${VERSION}.ota"
+            },
+            {
+              "manufacturerCode": 4891,
+              "imageType": 4,
+              "fileVersion": ${FILE_VERSION_DEC},
+              "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/zb_led_ctrl_c6_v${VERSION}.ota"
             }
           ]
           EOF
@@ -211,7 +242,8 @@ jobs:
           echo ""
           echo "📦 Version: ${{ steps.version.outputs.version }}"
           echo "🏷️  Tag: ${{ steps.version.outputs.tag }}"
-          echo "📄 OTA File: zb_led_controller_v${{ steps.version.outputs.version }}.ota"
+          echo "📄 H2 OTA: zb_led_controller_v${{ steps.version.outputs.version }}.ota (imageType 0x0002)"
+          echo "📄 C6 OTA: zb_led_ctrl_c6_v${{ steps.version.outputs.version }}.ota (imageType 0x0004)"
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
           echo ""
           echo "Users will be notified of the update within 24 hours (or on manual check)."

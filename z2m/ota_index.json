@@ -4,5 +4,11 @@
     "imageType": 2,
     "fileVersion": 66817,
     "url": "https://github.com/ShaunPCcom/zigbee-LED-ESP32-controller/releases/download/v1.5.1/zb_led_controller_v1.5.1.ota"
+  },
+  {
+    "manufacturerCode": 4891,
+    "imageType": 4,
+    "fileVersion": 66817,
+    "url": "https://github.com/ShaunPCcom/zigbee-LED-ESP32-controller/releases/download/v1.5.1/zb_led_ctrl_c6_v1.5.1.ota"
   }
 ]
