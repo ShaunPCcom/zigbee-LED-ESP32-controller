@@ -234,12 +234,11 @@ const tzLocal = {
     diag_reset: {
         key: ['diag_reset_boot_count'],
         convertSet: async (entity, key, value, meta) => {
-            if (!value) return;
             registerCustomClusters(meta.device);
             const ep = meta.device.getEndpoint(1);
             await ep.write('ledCtrlConfig', {diagReset: 1});
             meta.logger.info('[ZB_LED_CTRL] Boot count reset triggered');
-            return {state: {diag_reset_boot_count: false}};
+            return {state: {diag_reset_boot_count: ''}};
         },
     },
 
@@ -510,8 +509,8 @@ const definition = {
             'Uptime in seconds before last reset (0 = unknown, e.g. after power loss)', {unit: 's'}),
         numericExpose('min_free_heap', 'Min free heap', ACCESS_READ,
             'Minimum free heap memory since boot (bytes)', {unit: 'B'}),
-        binaryExpose('diag_reset_boot_count', 'Reset boot count', ACCESS_SET, true, false,
-            'Write true to reset the boot counter to 0'),
+        enumExpose('diag_reset_boot_count', 'Reset boot count', ACCESS_WRITE,
+            'Reset the boot counter to 0', ['Reset']),
         ...segExposes,
         ...presetExposes,
     ],
