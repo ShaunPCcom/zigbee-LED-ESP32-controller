@@ -379,6 +379,8 @@ esp_err_t zigbee_init(void)
     ESP_LOGI(TAG, "Initializing Zigbee stack as Router");
 #endif
 
+    zigbee_signal_handlers_setup();
+
     BaseType_t ret = xTaskCreate(zigbee_task, "zb_main", 8192, NULL, 5, NULL);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Zigbee task");

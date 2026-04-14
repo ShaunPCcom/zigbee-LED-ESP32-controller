@@ -1,63 +1,42 @@
 /**
  * @file zigbee_signal_handlers.h
- * @brief Zigbee signal handler and factory reset
+ * @brief LED-specific Zigbee lifecycle hooks and deferred ZCL sync.
+ *
+ * The common network lifecycle handler (esp_zb_app_signal_handler,
+ * zigbee_factory_reset, zigbee_full_factory_reset, reboot_cb, etc.) is
+ * provided by the shared zigbee_signal_handler component. This header
+ * re-exports those declarations and adds LED-specific additions.
  */
 
 #ifndef ZIGBEE_SIGNAL_HANDLERS_H
 #define ZIGBEE_SIGNAL_HANDLERS_H
 
-#include "esp_zigbee_core.h"
-#include <stdbool.h>
+#include "zigbee_signal_handler.h"  /* re-exports common API */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @brief Zigbee signal handler
+ * @brief Register LED-specific Zigbee lifecycle hooks.
  *
- * Handles Zigbee stack signals (join, leave, etc.)
- * This must be named esp_zb_app_signal_handler for the Zigbee stack
+ * Must be called before the Zigbee stack starts (i.e. before zigbee_init()).
+ * Registers on_joined, on_left, on_stack_init callbacks and the NVS namespace
+ * for full factory reset.
  */
-void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct);
+void zigbee_signal_handlers_setup(void);
 
 /**
- * @brief Zigbee network reset (keeps config)
+ * @brief Schedule a deferred sync of ZCL attributes from current LED state.
  *
- * Leaves the Zigbee network but preserves device configuration
- */
-void zigbee_factory_reset(void);
-
-/**
- * @brief Full factory reset (Zigbee + NVS config)
- *
- * Erases both Zigbee network data and NVS configuration
- */
-void zigbee_full_factory_reset(void);
-
-/**
- * @brief Schedule deferred ZCL sync from Zigbee task context
- *
- * Uses esp_zb_scheduler_alarm to defer sync_zcl_from_state() execution
- * to Zigbee task, avoiding critical section mismatch when called from
- * non-Zigbee tasks (e.g., CLI)
+ * Uses esp_zb_scheduler_alarm to defer sync_zcl_from_state() into the Zigbee
+ * task, avoiding FreeRTOS critical section violations when called from CLI
+ * or other non-Zigbee task contexts.
  */
 void schedule_zcl_sync(void);
-
-/**
- * @brief Reboot callback for deferred restart
- *
- * Exposed for use by attribute handlers that need deferred reboot
- */
-void reboot_cb(uint8_t param);
-
-/**
- * @brief Network joined state (for button LED feedback)
- */
-extern bool s_network_joined;
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // ZIGBEE_SIGNAL_HANDLERS_H
+#endif /* ZIGBEE_SIGNAL_HANDLERS_H */
