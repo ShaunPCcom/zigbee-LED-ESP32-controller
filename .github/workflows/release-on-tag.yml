@@ -141,18 +141,18 @@ jobs:
           FILE_VERSION_HEX="${{ steps.version.outputs.file_version_hex }}"
 
           python3 esp-zigbee-sdk/tools/image_builder_tool/image_builder_tool.py \
-            -c zb_led_controller_v${VERSION}.ota \
             -v ${FILE_VERSION_HEX} \
             -m 0x131B \
             -i 0x0002 \
-            -f build_h2/zb_led_controller.bin
+            --tag 0 build_h2/zb_led_controller.bin
+          mv 131B-0002-*-ota-file.zigbee zb_led_controller_v${VERSION}.ota
 
           python3 esp-zigbee-sdk/tools/image_builder_tool/image_builder_tool.py \
-            -c zb_led_ctrl_c6_v${VERSION}.ota \
             -v ${FILE_VERSION_HEX} \
             -m 0x131B \
             -i 0x0004 \
-            -f build_c6/zb_led_controller.bin
+            --tag 0 build_c6/zb_led_controller.bin
+          mv 131B-0004-*-ota-file.zigbee zb_led_ctrl_c6_v${VERSION}.ota
 
           echo "✅ OTA images created"
           ls -lh zb_led_controller_v${VERSION}.ota zb_led_ctrl_c6_v${VERSION}.ota
