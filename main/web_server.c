@@ -289,7 +289,11 @@ esp_err_t web_server_start(void)
         .device_name       = "LED Controller",
         .firmware_version  = FIRMWARE_VERSION_STRING,
         .nvs_namespace     = "led_cfg",
-        .ota_image_type      = 0x0004,   /* LED-C6 */
+#if CONFIG_IDF_TARGET_ESP32C6
+        .ota_image_type      = 0x0004,
+#else
+        .ota_image_type      = 0x0002,
+#endif
         .current_version_hex = FIRMWARE_VERSION,
         .index_html_start  = (const uint8_t *)index_html_start,
         .index_html_size   = (size_t)(index_html_end - index_html_start),
