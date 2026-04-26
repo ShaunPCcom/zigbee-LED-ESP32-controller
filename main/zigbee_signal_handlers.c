@@ -39,6 +39,8 @@ static void configure_diag_report(uint16_t attr_id, uint16_t max_interval)
     rpt.u.send_info.def_min_interval = DIAG_REPORT_MIN_INTERVAL;
     rpt.u.send_info.def_max_interval = max_interval;
     rpt.u.send_info.delta.u32        = 0;
+    rpt.dst.short_addr = 0x0000;
+    rpt.dst.endpoint   = 1;
     rpt.dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
     rpt.manuf_code     = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
     esp_zb_zcl_update_reporting_info(&rpt);
