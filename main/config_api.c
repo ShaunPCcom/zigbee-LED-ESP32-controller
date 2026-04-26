@@ -14,10 +14,18 @@
 #include "segment_manager.h"
 #include "transition_engine.h"
 
+#include "ota_check.h"
+#include "version.h"
+#include "zigbee_ota.h"
+
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_zigbee_core.h"
+#include "web_server_base.h"
 
 #include <string.h>
+
+extern void reboot_cb(uint8_t param);  /* From zigbee_signal_handlers.c */
 
 static const char *TAG = "config_api";
 
@@ -51,6 +59,8 @@ esp_err_t config_api_set_strip_config(const cJSON *obj)
     if (!obj) return ESP_ERR_INVALID_ARG;
 
     bool dirty = false;
+    uint16_t old_count[2] = { g_strip_count[0], g_strip_count[1] };
+    uint8_t  old_type[2]  = { g_strip_type[0],  g_strip_type[1]  };
 
     cJSON *item;
 
@@ -90,6 +100,14 @@ esp_err_t config_api_set_strip_config(const cJSON *obj)
             config_storage_save_strip_max_current(i, g_strip_max_current[i]);
         }
         led_renderer_recalc_power_scale();
+        web_server_base_sse_notify("config");
+
+        bool hw_changed = (g_strip_count[0] != old_count[0] || g_strip_count[1] != old_count[1] ||
+                           g_strip_type[0]  != old_type[0]  || g_strip_type[1]  != old_type[1]);
+        if (hw_changed) {
+            ESP_LOGI(TAG, "Strip count/type changed — rebooting in 1s to apply");
+            esp_zb_scheduler_alarm(reboot_cb, 0, 1000);
+        }
     }
 
     return ESP_OK;
@@ -162,9 +180,15 @@ static void apply_segment_json(int idx, const cJSON *obj)
         s->level = (uint8_t)item->valueint;
         if (s->on) transition_start(&s->level_trans, s->level, trans_ms);
     }
-    if ((item = cJSON_GetObjectItem(obj, "mode")) && cJSON_IsString(item)) {
+    /* Implicit mode switch: ct field → CT mode, hue/sat field → HS mode.
+     * Explicit 'mode' field wins and is applied last. */
+    if (cJSON_GetObjectItem(obj, "ct"))
+        s->color_mode = 2;
+    if (cJSON_GetObjectItem(obj, "hue") || cJSON_GetObjectItem(obj, "sat"))
+        s->color_mode = 0;
+    if ((item = cJSON_GetObjectItem(obj, "mode")) && cJSON_IsString(item))
         s->color_mode = strcmp(item->valuestring, "ct") == 0 ? 2 : 0;
-    }
+
     if ((item = cJSON_GetObjectItem(obj, "hue")) && cJSON_IsNumber(item)) {
         s->hue = (uint16_t)item->valueint;
         transition_start(&s->hue_trans, s->hue, trans_ms);
@@ -222,6 +246,8 @@ esp_err_t config_api_set_segments(const cJSON *obj)
             if (idx < 0 || idx >= MAX_SEGMENTS) continue;
             apply_segment_json(idx, entry);
         }
+        schedule_zcl_sync();
+        web_server_base_sse_notify("segments");
         return ESP_OK;
     }
 
@@ -231,6 +257,8 @@ esp_err_t config_api_set_segments(const cJSON *obj)
         int idx = idx_item->valueint;
         if (idx < 0 || idx >= MAX_SEGMENTS) return ESP_ERR_INVALID_ARG;
         apply_segment_json(idx, obj);
+        schedule_zcl_sync();
+        web_server_base_sse_notify("segments");
         return ESP_OK;
     }
 
@@ -270,18 +298,67 @@ esp_err_t config_api_apply_preset(int slot)
     esp_err_t err = preset_manager_recall(slot);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "apply_preset slot %d: %s", slot, esp_err_to_name(err));
+        return err;
     }
-    return err;
+    schedule_zcl_sync();
+    web_server_base_sse_notify("segments");
+    web_server_base_sse_notify("presets");
+    return ESP_OK;
 }
 
 esp_err_t config_api_save_preset(int slot, const char *name)
 {
     if (slot < 0 || slot >= MAX_PRESET_SLOTS) return ESP_ERR_INVALID_ARG;
-    return preset_manager_save(slot, (name && name[0]) ? name : NULL);
+    esp_err_t err = preset_manager_save(slot, (name && name[0]) ? name : NULL);
+    if (err == ESP_OK) web_server_base_sse_notify("presets");
+    return err;
 }
 
 esp_err_t config_api_delete_preset(int slot)
 {
     if (slot < 0 || slot >= MAX_PRESET_SLOTS) return ESP_ERR_INVALID_ARG;
-    return preset_manager_delete(slot);
+    esp_err_t err = preset_manager_delete(slot);
+    if (err == ESP_OK) web_server_base_sse_notify("presets");
+    return err;
+}
+
+/* ========================================================================== */
+/*  SSE serializer                                                             */
+/* ========================================================================== */
+
+int config_api_sse_serialize(const char *topic, char *buf, size_t buf_len)
+{
+    cJSON *json = NULL;
+    esp_err_t err;
+
+    if (strcmp(topic, "segments") == 0)
+        err = config_api_get_segments(&json);
+    else if (strcmp(topic, "config") == 0)
+        err = config_api_get_strip_config(&json);
+    else if (strcmp(topic, "presets") == 0)
+        err = config_api_get_presets(&json);
+    else if (strcmp(topic, "ota") == 0) {
+        const char *plain = FIRMWARE_VERSION_STRING;
+        if (plain[0] == 'v') plain++;
+        json = cJSON_CreateObject();
+        cJSON_AddBoolToObject  (json, "available",   ota_check_available());
+        cJSON_AddStringToObject(json, "current",     plain);
+        cJSON_AddStringToObject(json, "latest",      ota_check_latest_version());
+        cJSON_AddBoolToObject  (json, "in_progress", zigbee_ota_is_in_progress());
+        err = json ? ESP_OK : ESP_ERR_NO_MEM;
+    } else {
+        return -1;
+    }
+
+    if (err != ESP_OK || !json) return -1;
+
+    char *str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+    if (!str) return -1;
+
+    size_t len = strlen(str);
+    if (len >= buf_len) { free(str); return -1; }
+    memcpy(buf, str, len);
+    free(str);
+    return (int)len;
 }
