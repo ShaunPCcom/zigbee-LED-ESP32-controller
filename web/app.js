@@ -344,6 +344,18 @@ function bindSegCard(card, idx, initSeg) {
   gsEl.addEventListener('change', () => mutate({ start: +gsEl.value }));
   gcEl.addEventListener('change', () => mutate({ count: +gcEl.value }));
   gstEl.addEventListener('change', () => mutate({ strip: +gstEl.value }));
+
+  /* Apply any SSE update that was stashed while a control had focus */
+  card.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (card._pendingUpdate && !card.contains(document.activeElement)) {
+        const seg = card._pendingUpdate;
+        card._pendingUpdate = null;
+        S.segments[seg.index] = seg;
+        updateSegCardUI(card, seg);
+      }
+    }, 0);
+  });
 }
 
 /* ======================================================================
@@ -466,9 +478,18 @@ function buildConfigUI(cfg) {
       strip2_max_current: +document.getElementById('cfg-ma-2').value,
       transition_ms:      +document.getElementById('cfg-transition').value,
     };
+    const hwChanged = body.strip1_count !== cfg.strip1_count ||
+                      body.strip2_count !== cfg.strip2_count ||
+                      body.strip1_type  !== cfg.strip1_type  ||
+                      body.strip2_type  !== cfg.strip2_type;
     try {
       await apiPost('/api/config', body);
-      toast('Configuration saved', 'ok');
+      if (hwChanged) {
+        toast('Rebooting to apply strip changes\u2026', 'warning');
+        setTimeout(() => location.reload(), 3000);
+      } else {
+        toast('Configuration saved', 'ok');
+      }
     } catch (e) {
       toast(`Config error: ${e.message}`, 'error');
     }
@@ -547,17 +568,46 @@ function renderDiag(diag) {
   ]);
 }
 
+let s_otaPollFast = null;
+
 function renderOtaStatus(ota) {
   S.ota = ota;
-  const panel = document.getElementById('ota-status-panel');
+  const panel      = document.getElementById('ota-status-panel');
+  const banner     = document.getElementById('ota-banner');
+  const bannerText = document.getElementById('ota-banner-text');
+  const applyBtn   = document.getElementById('btn-ota-apply');
+
   panel.innerHTML = `current: ${ota.current || '—'}   latest: ${ota.latest || '—'}   available: ${ota.available ? 'YES' : 'no'}`;
 
-  const banner = document.getElementById('ota-banner');
-  if (ota.available) {
+  if (ota.in_progress) {
     banner.classList.remove('hidden');
-    document.getElementById('ota-ver').textContent = ota.latest;
+    if (bannerText) bannerText.innerHTML = 'Updating firmware\u2026';
+    if (applyBtn)   applyBtn.classList.add('hidden');
+    if (!s_otaPollFast) {
+      s_otaPollFast = setInterval(async () => {
+        try {
+          const d = await apiGet('/api/ota/status');
+          renderOtaStatus(d);
+          if (!d.in_progress) {
+            clearInterval(s_otaPollFast);
+            s_otaPollFast = null;
+          }
+        } catch (_) {}
+      }, 5000);
+    }
   } else {
-    banner.classList.add('hidden');
+    if (s_otaPollFast) {
+      clearInterval(s_otaPollFast);
+      s_otaPollFast = null;
+    }
+    if (ota.available) {
+      banner.classList.remove('hidden');
+      if (bannerText) bannerText.innerHTML = `Update available: <strong id="ota-ver">${ota.latest || '—'}</strong>`;
+      if (applyBtn)   applyBtn.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+      if (applyBtn)   applyBtn.classList.remove('hidden');
+    }
   }
 }
 
@@ -574,7 +624,8 @@ async function doOtaCheck() {
 async function doOtaApply(url) {
   try {
     await apiPost('/api/ota', { url });
-    toast('OTA update started — device will restart', 'ok');
+    toast('OTA update started \u2014 device will restart', 'ok');
+    renderOtaStatus({ in_progress: true });
   } catch (e) {
     toast(`OTA failed: ${e.message}`, 'error');
   }
@@ -731,7 +782,79 @@ async function init() {
       renderSystemStatus(s);
       renderWifiStatus(s);
     } catch (_) {}
+    try {
+      renderOtaStatus(await apiGet('/api/ota/status'));
+    } catch (_) {}
   }, 10000);
+
+  /* SSE — bidirectional sync with device */
+  let _sseReconnectTimer = null;
+  let _sseBadgeEl = null;
+
+  function showReconnectBadge(show) {
+    if (show && !_sseBadgeEl) {
+      _sseBadgeEl = document.createElement('div');
+      _sseBadgeEl.className = 'toast warning';
+      _sseBadgeEl.style.cssText = 'position:fixed;bottom:8px;left:50%;transform:translateX(-50%);z-index:999';
+      _sseBadgeEl.textContent = 'Live sync reconnecting\u2026';
+      document.body.appendChild(_sseBadgeEl);
+    } else if (!show && _sseBadgeEl) {
+      _sseBadgeEl.remove();
+      _sseBadgeEl = null;
+    }
+  }
+
+  const es = new EventSource('/api/events');
+
+  es.addEventListener('segments', (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+    (data.segments || []).forEach(seg => {
+      S.segments[seg.index] = seg;
+      const card = document.getElementById(`seg-${seg.index}`);
+      if (!card) return;
+      if (document.hasFocus() && card.contains(document.activeElement)) {
+        card._pendingUpdate = seg;
+      } else {
+        updateSegCardUI(card, seg);
+      }
+    });
+  });
+
+  es.addEventListener('config', (e) => {
+    let cfg;
+    try { cfg = JSON.parse(e.data); } catch(_) { return; }
+    buildConfigUI(cfg);
+  });
+
+  es.addEventListener('presets', (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+    S.presets = data.presets || [];
+    buildPresetCards();
+  });
+
+  es.onerror = () => {
+    clearTimeout(_sseReconnectTimer);
+    _sseReconnectTimer = setTimeout(() => showReconnectBadge(true), 5000);
+  };
+
+  es.onopen = () => {
+    clearTimeout(_sseReconnectTimer);
+    _sseReconnectTimer = null;
+    showReconnectBadge(false);
+  };
+
+  window.addEventListener('focus', () => {
+    document.querySelectorAll('[id^="seg-"]').forEach(card => {
+      if (card._pendingUpdate) {
+        const seg = card._pendingUpdate;
+        card._pendingUpdate = null;
+        S.segments[seg.index] = seg;
+        updateSegCardUI(card, seg);
+      }
+    });
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);
