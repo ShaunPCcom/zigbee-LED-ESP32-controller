@@ -581,7 +581,7 @@ function renderOtaStatus(ota) {
 
   if (ota.in_progress) {
     banner.classList.remove('hidden');
-    if (bannerText) bannerText.innerHTML = 'Updating firmware\u2026';
+    if (bannerText) bannerText.textContent = 'Updating firmware\u2026';
     if (applyBtn)   applyBtn.classList.add('hidden');
     if (!s_otaPollFast) {
       s_otaPollFast = setInterval(async () => {
@@ -625,7 +625,7 @@ async function doOtaApply(url) {
   try {
     await apiPost('/api/ota', { url });
     toast('OTA update started \u2014 device will restart', 'ok');
-    renderOtaStatus({ in_progress: true });
+    renderOtaStatus({ ...S.ota, in_progress: true });
   } catch (e) {
     toast(`OTA failed: ${e.message}`, 'error');
   }
@@ -782,9 +782,11 @@ async function init() {
       renderSystemStatus(s);
       renderWifiStatus(s);
     } catch (_) {}
-    try {
-      renderOtaStatus(await apiGet('/api/ota/status'));
-    } catch (_) {}
+    if (!s_otaPollFast) {
+      try {
+        renderOtaStatus(await apiGet('/api/ota/status'));
+      } catch (_) {}
+    }
   }, 10000);
 
   /* SSE — bidirectional sync with device */
