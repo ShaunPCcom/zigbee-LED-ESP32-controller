@@ -20,6 +20,7 @@
 
 #include "config_api.h"
 #include "version.h"
+#include "zigbee_ota.h"
 
 #include "cJSON.h"
 #include "esp_http_server.h"
@@ -266,6 +267,19 @@ static esp_err_t handle_delete_preset(httpd_req_t *req)
 }
 
 /* ========================================================================== */
+/*  OTA status callback                                                        */
+/* ========================================================================== */
+
+static void ota_status_cb(zigbee_ota_status_t status, uint8_t pct)
+{
+    (void)pct;
+    if (status == ZIGBEE_OTA_STATUS_START   ||
+        status == ZIGBEE_OTA_STATUS_SUCCESS  ||
+        status == ZIGBEE_OTA_STATUS_FAILED)
+        web_server_base_sse_notify("ota");
+}
+
+/* ========================================================================== */
 /*  Public API                                                                 */
 /* ========================================================================== */
 
@@ -296,6 +310,10 @@ esp_err_t web_server_start(void)
     web_server_base_register("/api/presets/apply",   HTTP_POST, handle_apply_preset,   false);
     web_server_base_register("/api/presets/save",    HTTP_POST, handle_save_preset,    false);
     web_server_base_register("/api/presets/delete",  HTTP_POST, handle_delete_preset,  false);
+
+    static const char *const sse_topics[] = {"segments", "config", "presets", "ota", NULL};
+    web_server_base_sse_register("/api/events", sse_topics, config_api_sse_serialize);
+    zigbee_ota_register_status_callback(ota_status_cb);
 
     ESP_LOGI(TAG, "LED web server started");
     return ESP_OK;
