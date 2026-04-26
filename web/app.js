@@ -568,8 +568,6 @@ function renderDiag(diag) {
   ]);
 }
 
-let s_otaPollFast = null;
-
 function renderOtaStatus(ota) {
   S.ota = ota;
   const panel      = document.getElementById('ota-status-panel');
@@ -587,23 +585,7 @@ function renderOtaStatus(ota) {
     banner.classList.remove('hidden');
     if (bannerText) bannerText.textContent = 'Updating firmware\u2026';
     if (applyBtn)   applyBtn.classList.add('hidden');
-    if (!s_otaPollFast) {
-      s_otaPollFast = setInterval(async () => {
-        try {
-          const d = await apiGet('/api/ota/status');
-          renderOtaStatus(d);
-          if (!d.in_progress) {
-            clearInterval(s_otaPollFast);
-            s_otaPollFast = null;
-          }
-        } catch (_) {}
-      }, 5000);
-    }
   } else {
-    if (s_otaPollFast) {
-      clearInterval(s_otaPollFast);
-      s_otaPollFast = null;
-    }
     if (ota.available) {
       banner.classList.remove('hidden');
       if (bannerText) bannerText.innerHTML = `Update available: <strong id="ota-ver">${ota.latest || '—'}</strong>`;
@@ -629,7 +611,6 @@ async function doOtaApply(url) {
   try {
     await apiPost('/api/ota', { url });
     toast('OTA update started \u2014 device will restart', 'ok');
-    renderOtaStatus({ ...S.ota, in_progress: true });
   } catch (e) {
     toast(`OTA failed: ${e.message}`, 'error');
   }
@@ -786,11 +767,6 @@ async function init() {
       renderSystemStatus(s);
       renderWifiStatus(s);
     } catch (_) {}
-    if (!s_otaPollFast) {
-      try {
-        renderOtaStatus(await apiGet('/api/ota/status'));
-      } catch (_) {}
-    }
   }, 10000);
 
   /* SSE — bidirectional sync with device */
@@ -838,6 +814,12 @@ async function init() {
     try { data = JSON.parse(e.data); } catch(_) { return; }
     S.presets = data.presets || [];
     buildPresetCards();
+  });
+
+  es.addEventListener('ota', (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+    renderOtaStatus(data);
   });
 
   es.onerror = () => {
