@@ -577,7 +577,11 @@ function renderOtaStatus(ota) {
   const bannerText = document.getElementById('ota-banner-text');
   const applyBtn   = document.getElementById('btn-ota-apply');
 
-  panel.innerHTML = `current: ${ota.current || '—'}   latest: ${ota.latest || '—'}   available: ${ota.available ? 'YES' : 'no'}`;
+  if (ota.in_progress) {
+    panel.textContent = 'Updating firmware\u2026';
+  } else {
+    panel.innerHTML = `current: ${ota.current || '—'}   latest: ${ota.latest || '—'}   available: ${ota.available ? 'YES' : 'no'}`;
+  }
 
   if (ota.in_progress) {
     banner.classList.remove('hidden');
