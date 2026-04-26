@@ -16,6 +16,11 @@
 #include "esp_heap_caps.h"
 #include "esp_zigbee_core.h"
 
+#include <string.h>
+#if CONFIG_IDF_TARGET_ESP32C6
+#include "web_server_base.h"
+#endif
+
 static const char *TAG = "led_renderer";
 
 /* Per-strip power scale: 0-255, applied as brightness multiplier */
@@ -30,8 +35,13 @@ static uint8_t s_power_scale[LED_DRIVER_MAX_STRIPS] = {255, 255};
 static uint16_t s_last_enh_hue[MAX_SEGMENTS + 1] = {0};
 static uint8_t  s_last_sat[MAX_SEGMENTS + 1]     = {0};
 static uint16_t s_last_ct[MAX_SEGMENTS + 1]      = {0};
+static uint8_t  s_last_zcl_mode[MAX_SEGMENTS];   /* 0xFF sentinel — see led_renderer_start() */
+static uint8_t  s_last_level[MAX_SEGMENTS]        = {0};
+static bool     s_last_on[MAX_SEGMENTS]           = {false};
 
 /* Globals set by main.cpp after NVS load */
+extern uint16_t g_strip_count[2];
+extern uint8_t  g_strip_type[2];
 extern uint16_t g_strip_max_current[2];
 
 /* ================================================================== */
@@ -148,7 +158,7 @@ void sync_zcl_from_state(void)
 static void sync_zcl_deferred_cb(uint8_t param)
 {
     (void)param;
-    ESP_LOGI(TAG, "Deferred ZCL sync after preset recall");
+    ESP_LOGI(TAG, "Deferred ZCL sync (web/preset change)");
     sync_zcl_from_state();
 }
 
@@ -164,8 +174,8 @@ void schedule_zcl_sync(void)
 void led_renderer_recalc_power_scale(void)
 {
     for (int i = 0; i < LED_DRIVER_MAX_STRIPS; i++) {
-        uint16_t count      = led_driver_get_count(i);
-        led_strip_type_t t  = led_driver_get_type(i);
+        uint16_t count      = g_strip_count[i];
+        led_strip_type_t t  = (led_strip_type_t)g_strip_type[i];
         uint16_t max_cur    = g_strip_max_current[i];
         uint16_t per_led_ma = (t == LED_STRIP_TYPE_WS2812B) ? 60 : 80;
 
@@ -260,6 +270,9 @@ void restore_leds_cb(uint8_t param)
 
 static void led_render_cb(uint8_t param)
 {
+#if CONFIG_IDF_TARGET_ESP32C6
+    bool seg_changed = false;
+#endif
     /* Poll attributes (SDK handles some commands internally, no callbacks) */
     segment_light_t *state = segment_state_get();
     for (int n = 0; n < MAX_SEGMENTS; n++) {
@@ -275,15 +288,36 @@ static void led_render_cb(uint8_t param)
             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID);
         if (attr_level && attr_level->data_p) {
             uint8_t new_level = *(uint8_t *)attr_level->data_p;
-            if (new_level != state[n].level) {
+            if (new_level != s_last_level[n]) {
+                s_last_level[n] = new_level;
                 state[n].level = new_level;
                 transition_start(&state[n].level_trans, new_level, g_global_transition_ms);
+#if CONFIG_IDF_TARGET_ESP32C6
+                seg_changed = true;
+#endif
             }
         }
 
-        /* Always sync color_mode from ZCL — prevents mode getting stuck when
-         * a group command changes the mode without changing the value */
-        state[n].color_mode = zcl_mode;
+        /* Detect on/off changes (set by attr handler or web UI) for SSE notifications.
+         * The render loop does not poll the ZCL on/off attribute — the attr handler
+         * owns that path. We just track when state[n].on changes. */
+#if CONFIG_IDF_TARGET_ESP32C6
+        if (state[n].on != s_last_on[n]) {
+            s_last_on[n] = state[n].on;
+            seg_changed = true;
+        }
+#endif
+
+        /* Only propagate ZCL color_mode when it changes — prevents the render loop
+         * from overwriting a web-UI-driven mode change on every tick, while still
+         * catching group-command mode changes (ZCL store actually changes in that case). */
+        if (zcl_mode != s_last_zcl_mode[n]) {
+            s_last_zcl_mode[n] = zcl_mode;
+            state[n].color_mode = zcl_mode;
+#if CONFIG_IDF_TARGET_ESP32C6
+            seg_changed = true;
+#endif
+        }
 
         /* Poll Enhanced Hue in color mode (0), CT in white mode (2) */
         if (zcl_mode == 0) {
@@ -296,6 +330,9 @@ static void led_render_cb(uint8_t param)
                     s_last_enh_hue[n] = enh_hue;
                     state[n].hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
                     transition_start(&state[n].hue_trans, state[n].hue, 0);
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                 }
             }
 
@@ -308,6 +345,9 @@ static void led_render_cb(uint8_t param)
                     s_last_sat[n] = new_sat;
                     state[n].saturation = new_sat;
                     transition_start(&state[n].sat_trans, new_sat, 0);
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                 }
             }
         } else if (zcl_mode == 2) {
@@ -320,6 +360,9 @@ static void led_render_cb(uint8_t param)
                     s_last_ct[n] = new_ct;
                     state[n].color_temp = new_ct;
                     transition_start(&state[n].ct_trans, new_ct, g_global_transition_ms);
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                 }
             }
         }
@@ -344,6 +387,9 @@ static void led_render_cb(uint8_t param)
                 uint16_t enh_hue = *(uint16_t *)attr_hue->data_p;
                 if (enh_hue != s_last_enh_hue[MAX_SEGMENTS]) {
                     s_last_enh_hue[MAX_SEGMENTS] = enh_hue;
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                     uint16_t hue = (uint16_t)((uint32_t)enh_hue * 360 / 65535);
                     uint8_t mode0 = 0;
                     for (int i = 0; i < MAX_SEGMENTS; i++) {
@@ -367,6 +413,9 @@ static void led_render_cb(uint8_t param)
                 uint8_t new_sat = *(uint8_t *)attr_sat->data_p;
                 if (new_sat != s_last_sat[MAX_SEGMENTS]) {
                     s_last_sat[MAX_SEGMENTS] = new_sat;
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                     for (int i = 0; i < MAX_SEGMENTS; i++) {
                         state[i].saturation = new_sat;
                         transition_start(&state[i].sat_trans, new_sat, 0);
@@ -381,6 +430,9 @@ static void led_render_cb(uint8_t param)
                 uint16_t new_ct = *(uint16_t *)attr_ct->data_p;
                 if (new_ct != s_last_ct[MAX_SEGMENTS]) {
                     s_last_ct[MAX_SEGMENTS] = new_ct;
+#if CONFIG_IDF_TARGET_ESP32C6
+                    seg_changed = true;
+#endif
                     uint8_t mode2 = 2;
                     for (int i = 0; i < MAX_SEGMENTS; i++) {
                         state[i].color_temp = new_ct;
@@ -411,12 +463,17 @@ static void led_render_cb(uint8_t param)
             ZB_ATTR_MIN_FREE_HEAP, &heap, false);
     }
 
+#if CONFIG_IDF_TARGET_ESP32C6
+    if (seg_changed) web_server_base_sse_notify("segments");
+#endif
+
     update_leds();
     esp_zb_scheduler_alarm(led_render_cb, 0, 5);
 }
 
 void led_renderer_start(void)
 {
+    memset(s_last_zcl_mode, 0xFF, sizeof(s_last_zcl_mode));
     ESP_LOGI(TAG, "Starting LED render/poll loop at 200Hz");
     esp_zb_scheduler_alarm(led_render_cb, 0, 5);
 }

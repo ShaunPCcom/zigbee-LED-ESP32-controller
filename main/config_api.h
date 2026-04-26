@@ -66,6 +66,13 @@ esp_err_t config_api_save_preset(int slot, const char *name);
  */
 esp_err_t config_api_delete_preset(int slot);
 
+/**
+ * @brief SSE serializer for the web_server_base SSE endpoint.
+ *        Serializes the named topic ("segments", "config", "presets") as JSON
+ *        into @p buf. Returns bytes written or < 0 on error.
+ */
+int config_api_sse_serialize(const char *topic, char *buf, size_t buf_len);
+
 #ifdef __cplusplus
 }
 #endif
